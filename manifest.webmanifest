@@ -1,0 +1,16 @@
+{
+  "name": "저녁 식탁",
+  "short_name": "식탁",
+  "description": "일주일 저녁 식단, 장보기, 냉장고를 한 번에",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f2f0eb",
+  "theme_color": "#1E3932",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
