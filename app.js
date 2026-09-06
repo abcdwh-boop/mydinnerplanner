@@ -798,6 +798,30 @@ var dragSrc = null, dragSrcDay = null, dragClone = null, dropTarget = null, isDr
 window.addEventListener("blur", function () { cleanupDrag(); });
 document.addEventListener("visibilitychange", function () { if (document.hidden) cleanupDrag(); });
 
+/* 요일을 교환하면 "된장국 3일차"가 1일차보다 앞에 오는 일이 생긴다.
+   앞에서부터 같은 국이 이어지는 만큼 다시 번호를 매긴다. */
+function resyncSoupAges() {
+  if (!S.plan) return;
+  let prevId = null, age = 0;
+  DAYS.forEach((d) => {
+    const p = S.plan[d];
+    if (!p || !p.soup) { prevId = null; age = 0; return; }
+    if (p.soup.id === prevId) age += 1; else { prevId = p.soup.id; age = 1; }
+    p.soup.age = age;
+  });
+}
+
+function swapDays(a, b) {
+  const old = JSON.parse(JSON.stringify(S.plan));
+  S.plan[a] = old[b];
+  S.plan[b] = old[a];
+  resyncSoupAges();
+  save();
+  V.open = null;
+  render();
+  toast(a + " ↔ " + b + " 메뉴를 바꿨어요");
+}
+
 function cleanupDrag() {
   if (dragClone) { dragClone.remove(); dragClone = null; }
   // 렌더로 사라진 노드까지 훑어 남은 흔적을 지운다
@@ -848,6 +872,7 @@ function initDrag() {
       // 클론 생성 — 드래그 중인 메뉴 카드
       dragClone = dragSrc.cloneNode(true);
       dragClone.classList.add('dragging');
+      dragClone.removeAttribute('data-day');
       dragClone.style.width = dragSrc.offsetWidth + 'px';
       document.body.appendChild(dragClone);
       dragSrc.classList.add('drag-origin');
@@ -859,7 +884,9 @@ function initDrag() {
     dragClone.style.left = dragSrc.getBoundingClientRect().left + 'px';
 
     // 드롭 대상 하이라이트
-    const allCards = [...document.querySelectorAll('.day-content[data-day]')];
+    // 클론(.dragging)은 손가락 바로 아래에 있고 data-day를 물려받았기 때문에
+    // 제외하지 않으면 자기 자신이 드롭 대상으로 잡혀 아무 일도 일어나지 않는다
+    const allCards = [...document.querySelectorAll('.day-content[data-day]:not(.dragging)')];
     const mouseY = getY(e);
     let found = null;
     for (const c of allCards) {
@@ -891,15 +918,8 @@ function initDrag() {
     document.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
 
     // 드롭 대상이 있으면 두 요일의 plan을 swap
-    if (dropTarget && dropTarget.dataset.day !== dragSrcDay) {
-      const targetDay = dropTarget.dataset.day;
-      const oldPlan = JSON.parse(JSON.stringify(S.plan));
-      S.plan[dragSrcDay] = oldPlan[targetDay];
-      S.plan[targetDay] = oldPlan[dragSrcDay];
-      save();
-      V.open = null;
-      render();
-      toast(dragSrcDay + '↔' + targetDay + ' 메뉴를 바꿨어요');
+    if (dropTarget && dropTarget.dataset.day && dropTarget.dataset.day !== dragSrcDay) {
+      swapDays(dragSrcDay, dropTarget.dataset.day);
     } else {
       render();
     }
@@ -935,6 +955,7 @@ function initDrag() {
       isDragging = true;
       dragClone = dragSrc.cloneNode(true);
       dragClone.classList.add('dragging');
+      dragClone.removeAttribute('data-day');
       dragClone.style.width = dragSrc.offsetWidth + 'px';
       document.body.appendChild(dragClone);
       dragSrc.classList.add('drag-origin');
@@ -945,7 +966,9 @@ function initDrag() {
     dragClone.style.left = dragSrc.getBoundingClientRect().left + 'px';
 
     // 터치 좌표로 대상 찾기 (elementFromPoint 사용)
-    const allCards = [...document.querySelectorAll('.day-content[data-day]')];
+    // 클론(.dragging)은 손가락 바로 아래에 있고 data-day를 물려받았기 때문에
+    // 제외하지 않으면 자기 자신이 드롭 대상으로 잡혀 아무 일도 일어나지 않는다
+    const allCards = [...document.querySelectorAll('.day-content[data-day]:not(.dragging)')];
     const touchY = getY(e);
     let found = null;
     for (const c of allCards) {
@@ -972,15 +995,8 @@ function initDrag() {
     if (dragClone) dragClone.remove();
     document.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
 
-    if (dropTarget && dropTarget.dataset.day !== dragSrcDay) {
-      const targetDay = dropTarget.dataset.day;
-      const oldPlan = JSON.parse(JSON.stringify(S.plan));
-      S.plan[dragSrcDay] = oldPlan[targetDay];
-      S.plan[targetDay] = oldPlan[dragSrcDay];
-      save();
-      V.open = null;
-      render();
-      toast(dragSrcDay + '↔' + targetDay + ' 메뉴를 바꿨어요');
+    if (dropTarget && dropTarget.dataset.day && dropTarget.dataset.day !== dragSrcDay) {
+      swapDays(dragSrcDay, dropTarget.dataset.day);
     } else {
       render();
     }
