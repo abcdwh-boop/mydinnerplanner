@@ -562,9 +562,41 @@ function pastView() {
   }).join("");
 }
 
+/* ══ 뒤로가기 ══
+   화면·시트·폼이 열리고 닫히는 것을 히스토리 한 칸으로 취급한다.
+   그래야 기기의 뒤로가기가 앱을 끄는 대신 이전 화면으로 돌아간다. */
+function routeSig() {
+  return [V.screen, V.sub, V.picker ? V.picker.day + V.picker.slot : "", V.form ? "form" : ""].join("|");
+}
+function routeSnap() {
+  return { screen: V.screen, sub: V.sub, picker: V.picker, form: !!V.form,
+    open: V.open, openRec: V.openRec, openWeek: V.openWeek };
+}
+let lastSig = null;
+function syncHistory() {
+  const cur = routeSig();
+  if (lastSig === null) { history.replaceState({ r: routeSnap() }, ""); lastSig = cur; return; }
+  if (cur !== lastSig) { history.pushState({ r: routeSnap() }, ""); lastSig = cur; }
+}
+window.addEventListener("popstate", function (e) {
+  const r = e.state && e.state.r;
+  if (!r) { V.screen = "home"; V.picker = null; V.form = null; }
+  else {
+    V.screen = r.screen || "home"; V.sub = r.sub || "list";
+    V.picker = r.picker || null;
+    if (!r.form) V.form = null;          // 폼에서 뒤로 = 취소
+    V.open = r.open; V.openRec = r.openRec; V.openWeek = r.openWeek;
+  }
+  lastSig = routeSig();                   // 되돌아온 위치를 기준으로 삼아 다시 밀어넣지 않는다
+  cleanupDrag();
+  render();
+});
+
 /* ══ 렌더 ══ */
 const TITLES = { home: "저녁 식탁", week: "이번 주 식단", shop: "장보기", fridge: "냉장고 관리", menu: "메뉴 관리", past: "지난 메뉴" };
 function render() {
+  cleanupDrag();          // 화면을 다시 그리기 전에 떠 있는 클론을 없앤다
+  syncHistory();
   const app = document.getElementById("app");
   document.getElementById("title").textContent = TITLES[V.screen];
   document.getElementById("back").style.visibility = V.screen === "home" ? "hidden" : "visible";
@@ -749,22 +781,38 @@ document.addEventListener("change", (e) => {
   fr.readAsText(e.target.files[0]);
 });
 
-document.getElementById("back").addEventListener("click", () => { V.screen = "home"; V.form = null; render(); });
+document.getElementById("back").addEventListener("click", () => {
+  if (history.state && history.state.r) history.back();
+  else { V.screen = "home"; V.form = null; render(); }
+});
 render();
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 
 /* ══ 드래그 앤 드롭 — 요일 메뉴 교환 (재생목록 스타일) ══ */
+/* 드래그 상태는 모듈 스코프에 둔다.
+   initDrag()는 렌더마다 새로 불리는데, 상태가 그 안에 갇혀 있으면
+   이전 렌더에서 만든 클론에 다시 손댈 수가 없어 화면에 남는다. */
+// var로 선언한다. 이 블록은 파일 아래쪽에 있는데 render()는 그보다 먼저 도는데,
+// let이면 초기화 전 접근으로 첫 로딩에서 바로 죽는다.
+var dragSrc = null, dragSrcDay = null, dragClone = null, dropTarget = null, isDragging = false;
+window.addEventListener("blur", function () { cleanupDrag(); });
+document.addEventListener("visibilitychange", function () { if (document.hidden) cleanupDrag(); });
+
+function cleanupDrag() {
+  if (dragClone) { dragClone.remove(); dragClone = null; }
+  // 렌더로 사라진 노드까지 훑어 남은 흔적을 지운다
+  document.querySelectorAll(".dragging").forEach((el) => el.remove());
+  document.querySelectorAll(".drag-origin").forEach((el) => el.classList.remove("drag-origin"));
+  document.querySelectorAll(".drop-target").forEach((el) => el.classList.remove("drop-target"));
+  dragSrc = null; dragSrcDay = null; dropTarget = null; isDragging = false;
+}
+
 function initDrag() {
   const contents = document.querySelectorAll('.day-content[data-day]');
   if (!contents.length) return;
 
-  let dragSrc = null;      // 드래그 시작한 .day-content
-  let dragSrcDay = null;   // 드래그 시작한 요일 키
-  let dragClone = null;
   let startY = 0;
   let offsetY = 0;
-  let isDragging = false;
-  let dropTarget = null;   // 현재 hover 중인 대상 .day-content
   const DRAG_THRESHOLD = 8;
 
   function getY(e) {
@@ -869,6 +917,7 @@ function initDrag() {
     const card = e.target.closest('.day-content[data-day]');
     if (!card) return;
 
+    e.preventDefault();   // 길게 누르기 메뉴와 당겨서 새로고침을 막는다
     dragSrc = card;
     dragSrcDay = card.dataset.day;
     startY = getY(e);
@@ -947,5 +996,7 @@ function initDrag() {
     card.addEventListener('touchstart', onTouchStart, { passive: false });
     card.addEventListener('touchmove', onTouchMove, { passive: false });
     card.addEventListener('touchend', onTouchEnd);
+    card.addEventListener('touchcancel', cleanupDrag);
+    card.addEventListener('contextmenu', (e) => { if (e.target.closest('.drag-handle')) e.preventDefault(); });
   });
 }
