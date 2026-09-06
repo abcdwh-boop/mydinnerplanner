@@ -478,10 +478,20 @@ function copyText(text) {
 /* 백업 파일, 예전 형식, 그리고 메뉴만 담긴 배열까지 모두 받아들인다 */
 function parseImport(raw) {
   const d = JSON.parse(raw);
-  if (Array.isArray(d)) return { recipes: d };
-  if (d.app === "dinner-table" && d.data) return { state: d.data };
-  if (d.recipes) return { recipes: d.recipes };
-  if (d.custom || d.archive || d.settings || d.prices) return { state: d };
+  // 메뉴만 담긴 배열
+  if (Array.isArray(d)) return { recipes: d, mode: "skip" };
+  // 이 앱이 내보낸 백업 파일
+  if (d.app === "dinner-table" && d.data) {
+    return { state: d.data, recipes: d.data.custom, prices: d.data.prices, mode: "skip" };
+  }
+  // 메뉴·가격을 담은 전달용 파일 (둘 중 하나만 있어도 된다)
+  if (d.recipes || d.menus || d.prices) {
+    return { recipes: d.recipes || d.menus || [], prices: d.prices || null, mode: d.mode === "replace" ? "replace" : "skip" };
+  }
+  // 예전 형식(상태 객체 그대로)
+  if (d.custom || d.archive || d.settings) {
+    return { state: d, recipes: d.custom, prices: d.prices, mode: "skip" };
+  }
   throw new Error("형식을 알 수 없습니다");
 }
 function normalize(obj) {
@@ -493,26 +503,45 @@ function normalize(obj) {
   ["checked", "edits", "prices"].forEach((k) => { if (!s[k] || typeof s[k] !== "object") s[k] = {}; });
   return s;
 }
-function mergeRecipes(list) {
-  let added = 0, skipped = 0;
+function mergeRecipes(list, replace) {
+  let added = 0, updated = 0, skipped = 0;
   (list || []).forEach((r) => {
     const name = (r.name || "").trim(); if (!name) return;
     const kind = ["soup", "main", "side"].indexOf(r.kind) > -1 ? r.kind : "main";
-    if (pool(kind).some((x) => x.name === name)) { skipped++; return; }
     const min = Number(r.min) || 20;
-    S.custom.push({
-      id: "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
-      kind: kind, name: name, min: min, p: r.p || "기타", w: min > 30, hearty: min >= 30,
+    const body = {
+      name: name, min: min, w: min > 30, hearty: min >= 30,
       ing: (r.ing || []).filter((i) => i && i.n).map((i) => ({
         n: String(i.n).trim(), q: Number(i.q) || 1,
         u: UNITS.indexOf(i.u) > -1 ? i.u : "개",
         c: CATS.indexOf(i.c) > -1 ? i.c : "채소",
       })),
       s: Array.isArray(r.s) ? r.s : String(r.s || "").split("\n").filter(Boolean),
-    });
+    };
+    const hit = pool(kind).filter((x) => x.name === name)[0];
+    if (hit) {
+      if (replace !== true) { skipped++; return; }
+      // 내가 만든 메뉴는 그 자리에서, 기본 메뉴는 수정분으로 덮는다
+      if (hit.id[0] === "c") S.custom = S.custom.map((c) => c.id === hit.id ? Object.assign({}, c, body) : c);
+      else S.edits[hit.id] = body;
+      updated++; return;
+    }
+    S.custom.push(Object.assign({
+      id: "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+      kind: kind, p: r.p || "기타",
+    }, body));
     added++;
   });
-  return { added: added, skipped: skipped };
+  return { added: added, updated: updated, skipped: skipped };
+}
+
+function mergePrices(obj) {
+  let n = 0;
+  Object.keys(obj || {}).forEach((k) => {
+    const v = Number(obj[k]);
+    if (!isNaN(v) && v >= 0) { S.prices[k] = v; n++; }
+  });
+  return n;
 }
 
 function formView() {
@@ -711,11 +740,15 @@ document.addEventListener("click", (e) => {
       S = normalize(got.state); TMP.imp.t = ""; save();
       V.screen = "home"; V.sub = "list"; toast("백업 시점으로 되돌렸어요");
     } else {
-      const list = got.recipes || (got.state && got.state.custom) || [];
-      const r = mergeRecipes(list);
-      if (got.state && got.state.prices) S.prices = Object.assign({}, S.prices, got.state.prices);
+      const r = mergeRecipes(got.recipes || [], got.mode === "replace");
+      const pn = mergePrices(got.prices);
       TMP.imp.t = ""; save();
-      toast(r.added + "개 추가" + (r.skipped ? ", " + r.skipped + "개는 이름이 같아 건너뜀" : ""));
+      const bits = [];
+      if (r.added) bits.push("메뉴 " + r.added + "개 추가");
+      if (r.updated) bits.push(r.updated + "개 갱신");
+      if (r.skipped) bits.push(r.skipped + "개는 이름이 같아 건너뜀");
+      if (pn) bits.push("가격 " + pn + "개 반영");
+      toast(bits.length ? bits.join(", ") : "가져올 것이 없었어요");
     }
   }
   else if (a === "wipe") {
