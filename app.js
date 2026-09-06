@@ -10,7 +10,7 @@ const CATS = Object.keys(SHELF);
 const FRESH = {
   v: 2, weekStart: null, plan: null, fridge: [], checked: {}, extra: [],
   trash: [], loved: [], excluded: [], custom: [], edits: {}, prices: {},
-  archive: [], settings: { sideDay: "수", outDay: "금", people: 3 },
+  lastBackup: null, archive: [], settings: { sideDay: "수", outDay: "금", people: 3 },
 };
 
 let S = loadState();
@@ -368,7 +368,9 @@ function fridgeView() {
 function menuView() {
   if (V.form) return formView();
   let h = `<div class="tabs"><button class="tb${V.sub === "list" ? " on" : ""}" data-a="sub:list">메뉴</button>
-    <button class="tb${V.sub === "price" ? " on" : ""}" data-a="sub:price">재료 가격</button></div>`;
+    <button class="tb${V.sub === "price" ? " on" : ""}" data-a="sub:price">재료 가격</button>
+    <button class="tb${V.sub === "data" ? " on" : ""}" data-a="sub:data">백업</button></div>`;
+  if (V.sub === "data") return h + dataView();
   if (V.sub === "price") {
     const names = {};
     rawAll().forEach((r) => (getR(r.id).ing || []).forEach((i) => names[i.n] = i));
@@ -413,6 +415,104 @@ function menuView() {
   h += `<div class="fl">식구 수</div><div class="pills">` + [2, 3, 4, 5].map((n) =>
     `<button class="pill${S.settings.people === n ? " on" : ""}" data-a="cfg:people:${n}">${n}명</button>`).join("") + `</div></div>`;
   return h;
+}
+
+function dataView() {
+  const n = [["내 메뉴", S.custom.length + "개"], ["고친 메뉴", Object.keys(S.edits).length + "개"],
+    ["고친 가격", Object.keys(S.prices).length + "개"], ["주간 기록", S.archive.length + "주"],
+    ["냉장고", S.fridge.length + "가지"]];
+  return `<p class="lead">데이터는 이 기기의 브라우저 안에만 있습니다. 저장소를 지우거나 기기를 바꾸면 사라져요.
+    가끔 파일로 내려받아 두시면 그대로 되살릴 수 있습니다.</p>
+
+  <h3 class="gh">내보내기</h3>
+  <div class="card pad">
+    <div class="stat">${n.map(([k, v]) => `<span><i>${k}</i>${v}</span>`).join("")}</div>
+    <div class="acts"><button class="btn" data-a="expfile">파일로 내려받기</button>
+      <button class="btn ghost" data-a="expcopy">클립보드에 복사</button></div>
+    <p class="hint">${S.lastBackup ? "마지막 백업 " + S.lastBackup + " (" + gap(S.lastBackup, today()) + "일 전)" : "아직 백업한 적이 없습니다."}</p>
+  </div>
+
+  <h3 class="gh">가져오기</h3>
+  <div class="card pad">
+    <input type="file" id="impfile" accept=".json,application/json,text/plain">
+    <p class="hint">또는 백업 내용을 여기에 붙여넣으세요.</p>
+    <textarea data-f="imp.t" rows="4" placeholder="백업 파일 내용, 또는 메뉴 목록">${esc(TMP.imp.t)}</textarea>
+    <div class="acts"><button class="btn ghost" data-a="impmenu">메뉴만 합치기</button>
+      <button class="btn ghost" data-a="impall">전체 복원</button></div>
+    <p class="hint"><b>메뉴만 합치기</b>는 지금 데이터를 그대로 두고 메뉴와 가격만 더합니다. 이름이 같은 메뉴는 건너뜁니다.<br>
+      <b>전체 복원</b>은 지금 것을 모두 지우고 백업 시점으로 되돌립니다.</p>
+  </div>
+
+  <h3 class="gh">초기화</h3>
+  <div class="card pad">
+    <button class="btn ghost" data-a="wipe">${V.wipe ? "한 번 더 누르면 정말 지워집니다" : "모든 데이터 지우기"}</button>
+    <p class="hint">되돌릴 수 없습니다. 지우기 전에 먼저 내보내기를 해 두세요.</p>
+  </div>`;
+}
+
+/* ── 백업 입출력 ── */
+function exportText() { return JSON.stringify({ app: "dinner-table", v: 2, at: today(), data: S }, null, 1); }
+function stamp() { S.lastBackup = today(); save(); }
+
+function download(name, text) {
+  try {
+    const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = name; document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 500);
+    return true;
+  } catch (e) { return false; }
+}
+function copyText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text).then(() => true).catch(() => false);
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove();
+    return Promise.resolve(true);
+  } catch (e) { return Promise.resolve(false); }
+}
+
+/* 백업 파일, 예전 형식, 그리고 메뉴만 담긴 배열까지 모두 받아들인다 */
+function parseImport(raw) {
+  const d = JSON.parse(raw);
+  if (Array.isArray(d)) return { recipes: d };
+  if (d.app === "dinner-table" && d.data) return { state: d.data };
+  if (d.recipes) return { recipes: d.recipes };
+  if (d.custom || d.archive || d.settings || d.prices) return { state: d };
+  throw new Error("형식을 알 수 없습니다");
+}
+function normalize(obj) {
+  const base = JSON.parse(JSON.stringify(FRESH));
+  const s = Object.assign(base, obj);
+  s.settings = Object.assign({}, FRESH.settings, obj.settings || {});
+  ["fridge", "extra", "trash", "loved", "excluded", "custom", "archive"]
+    .forEach((k) => { if (!Array.isArray(s[k])) s[k] = []; });
+  ["checked", "edits", "prices"].forEach((k) => { if (!s[k] || typeof s[k] !== "object") s[k] = {}; });
+  return s;
+}
+function mergeRecipes(list) {
+  let added = 0, skipped = 0;
+  (list || []).forEach((r) => {
+    const name = (r.name || "").trim(); if (!name) return;
+    const kind = ["soup", "main", "side"].indexOf(r.kind) > -1 ? r.kind : "main";
+    if (pool(kind).some((x) => x.name === name)) { skipped++; return; }
+    const min = Number(r.min) || 20;
+    S.custom.push({
+      id: "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+      kind: kind, name: name, min: min, p: r.p || "기타", w: min > 30, hearty: min >= 30,
+      ing: (r.ing || []).filter((i) => i && i.n).map((i) => ({
+        n: String(i.n).trim(), q: Number(i.q) || 1,
+        u: UNITS.indexOf(i.u) > -1 ? i.u : "개",
+        c: CATS.indexOf(i.c) > -1 ? i.c : "채소",
+      })),
+      s: Array.isArray(r.s) ? r.s : String(r.s || "").split("\n").filter(Boolean),
+    });
+    added++;
+  });
+  return { added: added, skipped: skipped };
 }
 
 function formView() {
@@ -490,7 +590,7 @@ function pickerHTML() {
 }
 
 /* ══ 입력 ══ */
-const TMP = { ex: { n: "", q: "1", u: "개", c: "채소" }, fr: { n: "", q: "", c: "채소" } };
+const TMP = { ex: { n: "", q: "1", u: "개", c: "채소" }, fr: { n: "", q: "", c: "채소" }, imp: { t: "" } };
 document.addEventListener("input", (e) => {
   const f = e.target.dataset.f; if (!f) return;
   const parts = f.split(".");
@@ -557,7 +657,39 @@ document.addEventListener("click", (e) => {
     S.fridge.push({ id: Math.random().toString(36).slice(2), n: TMP.fr.n.trim(), c: TMP.fr.c, q: TMP.fr.q, bought: today() });
     TMP.fr.n = ""; TMP.fr.q = ""; save();
   }
-  else if (a === "sub") { V.sub = x; V.openRec = null; }
+  else if (a === "sub") { V.sub = x; V.openRec = null; V.wipe = false; }
+  else if (a === "gobk") { V.screen = "menu"; V.sub = "data"; }
+  else if (a === "expfile") {
+    const ok = download("저녁식탁-백업-" + today() + ".json", exportText());
+    if (ok) { stamp(); toast("백업 파일을 내려받았어요"); }
+    else toast("내려받기에 실패했어요. 복사를 써 주세요");
+  }
+  else if (a === "expcopy") {
+    const text = exportText();
+    copyText(text).then((ok) => { if (ok) { stamp(); render(); toast("클립보드에 복사했어요"); } else toast("복사에 실패했어요"); });
+  }
+  else if (a === "impall" || a === "impmenu") {
+    const raw = (TMP.imp.t || "").trim();
+    if (!raw) return toast("가져올 내용이 없어요");
+    let got;
+    try { got = parseImport(raw); }
+    catch (err) { return toast("읽을 수 없는 형식이에요"); }
+    if (a === "impall") {
+      if (!got.state) return toast("전체 복원은 백업 파일로만 됩니다");
+      S = normalize(got.state); TMP.imp.t = ""; save();
+      V.screen = "home"; V.sub = "list"; toast("백업 시점으로 되돌렸어요");
+    } else {
+      const list = got.recipes || (got.state && got.state.custom) || [];
+      const r = mergeRecipes(list);
+      if (got.state && got.state.prices) S.prices = Object.assign({}, S.prices, got.state.prices);
+      TMP.imp.t = ""; save();
+      toast(r.added + "개 추가" + (r.skipped ? ", " + r.skipped + "개는 이름이 같아 건너뜀" : ""));
+    }
+  }
+  else if (a === "wipe") {
+    if (!V.wipe) { V.wipe = true; toast("한 번 더 누르면 모두 지워집니다"); }
+    else { S = JSON.parse(JSON.stringify(FRESH)); save(); V.wipe = false; V.screen = "home"; toast("모두 지웠어요"); }
+  }
   else if (a === "rec") V.openRec = V.openRec === x ? null : x;
   else if (a === "love") { S.loved = S.loved.indexOf(x) > -1 ? S.loved.filter((i) => i !== x) : S.loved.concat(x); save(); }
   else if (a === "excl") { S.excluded = S.excluded.indexOf(x) > -1 ? S.excluded.filter((i) => i !== x) : S.excluded.concat(x); save(); }
@@ -607,6 +739,14 @@ document.addEventListener("click", (e) => {
     save(); V.screen = "week"; toast("이 주 식단을 가져왔어요");
   }
   render();
+});
+
+document.addEventListener("change", (e) => {
+  if (e.target.id !== "impfile" || !e.target.files || !e.target.files[0]) return;
+  const fr = new FileReader();
+  fr.onload = () => { TMP.imp.t = String(fr.result); render(); toast("파일을 읽었어요. 아래 버튼을 눌러 주세요"); };
+  fr.onerror = () => toast("파일을 읽지 못했어요");
+  fr.readAsText(e.target.files[0]);
 });
 
 document.getElementById("back").addEventListener("click", () => { V.screen = "home"; V.form = null; render(); });
