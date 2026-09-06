@@ -15,6 +15,7 @@ const FRESH = {
 
 let S = loadState();
 let V = { screen: "home", open: null, picker: null, form: null, sub: "list", openRec: null, openWeek: null };
+let prevScreen = "home";
 
 function loadState() {
   const base = JSON.parse(JSON.stringify(FRESH));   // 배열·객체까지 새로 만든다
@@ -232,14 +233,18 @@ function homeView() {
   const exp = S.fridge.filter((f) => leftOf(f) <= 2 && leftOf(f) >= 0);
   const over = S.fridge.filter((f) => leftOf(f) < 0);
   const items = [
-    ["week", "이번 주 식단", S.plan ? "7일치 메뉴와 요일별 비용" : "아직 짜지 않았어요"],
-    ["shop", "장보기", S.plan ? shoppingList().filter((i) => !i.have).length + "가지 · " + won(weekCost()) : "식단을 먼저 짜 주세요"],
-    ["fridge", "냉장고 관리", S.fridge.length ? S.fridge.length + "가지" + (over.length ? " · 기한 지남 " + over.length : exp.length ? " · 서둘러 " + exp.length : "") : "비어 있음"],
-    ["menu", "메뉴 관리", pool("soup").length + pool("main").length + pool("side").length + "가지 · 재료와 가격"],
-    ["past", "지난 메뉴", S.archive.length ? S.archive.length + "주 기록 · 별점" : "기록 없음"],
+    ["week", "calendar_month", "이번 주 식단", S.plan ? "7일치 메뉴" : "아직 없어요"],
+    ["shop", "shopping_bag", "장보기", S.plan ? shoppingList().filter((i) => !i.have).length + "가지" : "식단 먼저"],
+    ["fridge", "kitchen", "냉장고", S.fridge.length ? S.fridge.length + "가지" : "비어 있음"],
+    ["menu", "menu_book", "메뉴 관리", pool("soup").length + pool("main").length + pool("side").length + "개"],
+    ["past", "history", "지난 메뉴", S.archive.length ? S.archive.length + "주" : "기록 없음"],
   ];
-  return hero + `<nav class="menu">` + items.map(([k, t, s]) =>
-    `<button class="row" data-a="go:${k}"><span class="rt">${t}</span><span class="rs">${esc(s)}</span><span class="ar">›</span></button>`).join("") + `</nav>`;
+  return hero + `<nav class="grid-menu">` + items.map(([k, icon, t, s]) =>
+    `<button class="grid-item" data-a="go:${k}">
+      <span class="gi-icon material-symbols-rounded">${icon}</span>
+      <span class="gi-label">${t}</span>
+      <span class="gi-sub">${esc(s)}</span>
+    </button>`).join("") + `</nav>`;
 }
 
 function weekView() {
@@ -247,6 +252,7 @@ function weekView() {
   const ti = todayIdx(), fresh = S.weekStart === mondayOf(new Date());
   let h = `<div class="bar"><span>${lab(S.weekStart)} ~ ${lab(addDays(S.weekStart, 6))}</span>
     <span class="tot">메뉴 원가 합계 ${won(DAYS.reduce((a, d) => a + dayCost(d), 0))}</span></div>`;
+  h += `<div class="week-list">`;
   h += DAYS.map((d, i) => {
     const p = S.plan[d]; if (!p) return "";
     const soup = p.soup ? getR(p.soup.id) : null, main = p.main ? getR(p.main) : null, side = p.side ? getR(p.side) : null;
@@ -257,13 +263,21 @@ function weekView() {
     else if (p.type === "반찬") body = `<div class="mn">반찬 사 오는 날</div><div class="sb">${soup ? esc(soup.name) + (p.soup.age > 1 ? " " + p.soup.age + "일차" : "") + " · " : ""}밥과 국만</div>`;
     else body = `<div class="mn">${esc(main ? main.name : "메뉴를 골라 주세요")}</div>
       <div class="sb">${soup ? esc(soup.name) + (p.soup.age > 1 ? " " + p.soup.age + "일차" : "") : ""}${soup && side ? " · " : ""}${side ? esc(side.name) : ""}</div>`;
-    return `<div class="day ${p.type}${i === ti && fresh ? " today" : ""}">
-      <button class="dhead" data-a="day:${d}">
-        <span class="dd"><b>${d}</b><i>${lab(addDays(S.weekStart, i))}</i></span>
-        <span class="dbody">${body}</span>
-        <span class="dmeta">${mins ? mins + "분<br>" : ""}${dayCost(d) ? won(dayCost(d)) : ""}</span>
-      </button>${open ? dayDetail(d, p) : ""}</div>`;
+    return `<div class="day-row" data-day="${d}">
+      <div class="day-label${i === ti && fresh ? ' today' : ''}">
+        <b>${d}</b><i>${lab(addDays(S.weekStart, i))}</i>
+      </div>
+      <div class="day-content ${p.type}${i === ti && fresh ? ' today' : ''}" data-day="${d}">
+        <span class="drag-handle" aria-label="드래그하여 메뉴 이동">⠿</span>
+        <button class="dhead" data-a="day:${d}">
+          <span class="dbody">${body}</span>
+          <span class="dmeta">${mins ? mins + "분<br>" : ""}${dayCost(d) ? won(dayCost(d)) : ""}</span>
+        </button>
+        ${open ? dayDetail(d, p) : ""}
+      </div>
+    </div>`;
   }).join("");
+  h += `</div>`;
   h += `<div class="acts"><button class="btn ghost" data-a="gen">전체 다시 짜기</button>
         <button class="btn ghost" data-a="finish">이번 주 기록에 저장</button></div>`;
   return h;
@@ -457,7 +471,13 @@ function render() {
   app.innerHTML = { home: homeView, week: weekView, shop: shopView, fridge: fridgeView, menu: menuView, past: pastView }[V.screen]();
   document.getElementById("sheet").innerHTML = V.picker ? pickerHTML() : "";
   document.getElementById("sheet").className = V.picker ? "on" : "";
-  window.scrollTo(0, 0);
+  // 화면이 바뀔 때만 스크롤 초기화
+  if (prevScreen !== V.screen) {
+    window.scrollTo(0, 0);
+    prevScreen = V.screen;
+  }
+  // 주간 식단 화면이면 드래그 앤 드롭 초기화
+  if (V.screen === 'week') initDrag();
 }
 function pickerHTML() {
   const { day, slot } = V.picker;
@@ -592,3 +612,200 @@ document.addEventListener("click", (e) => {
 document.getElementById("back").addEventListener("click", () => { V.screen = "home"; V.form = null; render(); });
 render();
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+
+/* ══ 드래그 앤 드롭 — 요일 메뉴 교환 (재생목록 스타일) ══ */
+function initDrag() {
+  const contents = document.querySelectorAll('.day-content[data-day]');
+  if (!contents.length) return;
+
+  let dragSrc = null;      // 드래그 시작한 .day-content
+  let dragSrcDay = null;   // 드래그 시작한 요일 키
+  let dragClone = null;
+  let startY = 0;
+  let offsetY = 0;
+  let isDragging = false;
+  let dropTarget = null;   // 현재 hover 중인 대상 .day-content
+  const DRAG_THRESHOLD = 8;
+
+  function getY(e) {
+    return e.touches ? e.touches[0].clientY : e.clientY;
+  }
+
+  function onStart(e) {
+    // 드래그 핸들에서만 시작
+    const handle = e.target.closest('.drag-handle');
+    if (!handle) return;
+    const card = e.target.closest('.day-content[data-day]');
+    if (!card) return;
+
+    e.preventDefault();
+    dragSrc = card;
+    dragSrcDay = card.dataset.day;
+    startY = getY(e);
+    isDragging = false;
+    const rect = card.getBoundingClientRect();
+    offsetY = getY(e) - rect.top;
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onEnd);
+  }
+
+  function onMove(e) {
+    if (!dragSrc) return;
+    const dy = Math.abs(getY(e) - startY);
+    if (!isDragging && dy < DRAG_THRESHOLD) return;
+
+    if (!isDragging) {
+      isDragging = true;
+      // 클론 생성 — 드래그 중인 메뉴 카드
+      dragClone = dragSrc.cloneNode(true);
+      dragClone.classList.add('dragging');
+      dragClone.style.width = dragSrc.offsetWidth + 'px';
+      document.body.appendChild(dragClone);
+      dragSrc.classList.add('drag-origin');
+    }
+
+    e.preventDefault();
+    const containerRect = dragSrc.parentNode.parentNode.getBoundingClientRect();
+    dragClone.style.top = (getY(e) - offsetY) + 'px';
+    dragClone.style.left = dragSrc.getBoundingClientRect().left + 'px';
+
+    // 드롭 대상 하이라이트
+    const allCards = [...document.querySelectorAll('.day-content[data-day]')];
+    const mouseY = getY(e);
+    let found = null;
+    for (const c of allCards) {
+      if (c === dragSrc) { c.classList.remove('drop-target'); continue; }
+      const r = c.getBoundingClientRect();
+      if (mouseY >= r.top && mouseY <= r.bottom) {
+        found = c;
+        c.classList.add('drop-target');
+      } else {
+        c.classList.remove('drop-target');
+      }
+    }
+    dropTarget = found;
+  }
+
+  function onEnd(e) {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onEnd);
+
+    if (!isDragging || !dragSrc) {
+      dragSrc = null;
+      isDragging = false;
+      return;
+    }
+
+    // 클린업
+    dragSrc.classList.remove('drag-origin');
+    if (dragClone) dragClone.remove();
+    document.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
+
+    // 드롭 대상이 있으면 두 요일의 plan을 swap
+    if (dropTarget && dropTarget.dataset.day !== dragSrcDay) {
+      const targetDay = dropTarget.dataset.day;
+      const oldPlan = JSON.parse(JSON.stringify(S.plan));
+      S.plan[dragSrcDay] = oldPlan[targetDay];
+      S.plan[targetDay] = oldPlan[dragSrcDay];
+      save();
+      V.open = null;
+      render();
+      toast(dragSrcDay + '↔' + targetDay + ' 메뉴를 바꿨어요');
+    } else {
+      render();
+    }
+
+    dragSrc = null;
+    dragClone = null;
+    dropTarget = null;
+    isDragging = false;
+  }
+
+  // 터치 이벤트
+  function onTouchStart(e) {
+    const handle = e.target.closest('.drag-handle');
+    if (!handle) return;
+    const card = e.target.closest('.day-content[data-day]');
+    if (!card) return;
+
+    dragSrc = card;
+    dragSrcDay = card.dataset.day;
+    startY = getY(e);
+    isDragging = false;
+    const rect = card.getBoundingClientRect();
+    offsetY = getY(e) - rect.top;
+  }
+
+  function onTouchMove(e) {
+    if (!dragSrc) return;
+    const dy = Math.abs(getY(e) - startY);
+    if (!isDragging && dy < DRAG_THRESHOLD) return;
+
+    if (!isDragging) {
+      isDragging = true;
+      dragClone = dragSrc.cloneNode(true);
+      dragClone.classList.add('dragging');
+      dragClone.style.width = dragSrc.offsetWidth + 'px';
+      document.body.appendChild(dragClone);
+      dragSrc.classList.add('drag-origin');
+    }
+
+    e.preventDefault();
+    dragClone.style.top = (getY(e) - offsetY) + 'px';
+    dragClone.style.left = dragSrc.getBoundingClientRect().left + 'px';
+
+    // 터치 좌표로 대상 찾기 (elementFromPoint 사용)
+    const allCards = [...document.querySelectorAll('.day-content[data-day]')];
+    const touchY = getY(e);
+    let found = null;
+    for (const c of allCards) {
+      if (c === dragSrc) { c.classList.remove('drop-target'); continue; }
+      const r = c.getBoundingClientRect();
+      if (touchY >= r.top && touchY <= r.bottom) {
+        found = c;
+        c.classList.add('drop-target');
+      } else {
+        c.classList.remove('drop-target');
+      }
+    }
+    dropTarget = found;
+  }
+
+  function onTouchEnd(e) {
+    if (!isDragging || !dragSrc) {
+      dragSrc = null;
+      isDragging = false;
+      return;
+    }
+
+    dragSrc.classList.remove('drag-origin');
+    if (dragClone) dragClone.remove();
+    document.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
+
+    if (dropTarget && dropTarget.dataset.day !== dragSrcDay) {
+      const targetDay = dropTarget.dataset.day;
+      const oldPlan = JSON.parse(JSON.stringify(S.plan));
+      S.plan[dragSrcDay] = oldPlan[targetDay];
+      S.plan[targetDay] = oldPlan[dragSrcDay];
+      save();
+      V.open = null;
+      render();
+      toast(dragSrcDay + '↔' + targetDay + ' 메뉴를 바꿨어요');
+    } else {
+      render();
+    }
+
+    dragSrc = null;
+    dragClone = null;
+    dropTarget = null;
+    isDragging = false;
+  }
+
+  contents.forEach(card => {
+    card.addEventListener('mousedown', onStart);
+    card.addEventListener('touchstart', onTouchStart, { passive: false });
+    card.addEventListener('touchmove', onTouchMove, { passive: false });
+    card.addEventListener('touchend', onTouchEnd);
+  });
+}
