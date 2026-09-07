@@ -75,10 +75,13 @@ function weekEnded() { return S.plan && S.weekStart && gap(S.weekStart, today())
 
 function weekBar() {
   const ws = targetWeek();
+  // 아이콘 글꼴이 안 뜨더라도 읽히도록 글자를 함께 넣는다
   return `<div class="weekbar">
-    <button class="wnav" data-a="wshift:-7">‹</button>
+    <button class="wnav" data-a="wshift:-7">
+      <span class="material-symbols-rounded">chevron_left</span><i>지난주</i></button>
     <div class="wlab"><b>${lab(ws)} ~ ${lab(addDays(ws, 6))}</b><i>${weekLabel(ws)}</i></div>
-    <button class="wnav" data-a="wshift:7">›</button>
+    <button class="wnav" data-a="wshift:7">
+      <i>다음주</i><span class="material-symbols-rounded">chevron_right</span></button>
   </div>`;
 }
 

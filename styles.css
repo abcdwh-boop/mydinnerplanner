@@ -679,17 +679,18 @@ h3.gh.sticky{
 
 /* ══════════ 주 선택 ══════════ */
 .weekbar{
-  display:flex; align-items:center; gap:8px; background:var(--card);
-  border:1px solid var(--line); border-radius:8px; padding:6px; margin-bottom:10px;
+  display:flex; align-items:center; gap:6px; background:var(--card);
+  border:1px solid var(--line); border-radius:10px; padding:6px; margin-bottom:10px;
 }
 .weekbar .wnav{
-  width:40px; height:40px; flex-shrink:0; border-radius:8px;
-  border:1px solid var(--gold-light); background:rgba(196,154,60,.10);
-  color:var(--gold); font-size:22px; font-weight:700; line-height:1;
-  cursor:pointer; font-family:inherit;
+  display:flex; align-items:center; gap:2px; flex-shrink:0;
+  padding:8px 10px; border-radius:8px;
+  border:1px solid var(--gold-light); background:rgba(196,154,60,.12);
+  color:var(--gold); cursor:pointer; font-family:inherit;
 }
-.weekbar .wnav:active{background:rgba(196,154,60,.22)}
-.weekbar .wlab i{color:var(--gold)}
-.weekbar .wlab{flex:1; text-align:center; line-height:1.35}
-.weekbar .wlab b{display:block; font-size:14.5px; font-weight:700}
-.weekbar .wlab i{display:block; font-size:11.5px; font-style:normal; color:var(--green); font-weight:600}
+.weekbar .wnav .material-symbols-rounded{font-size:20px; line-height:1}
+.weekbar .wnav i{font-style:normal; font-size:11.5px; font-weight:700; color:var(--gold)}
+.weekbar .wnav:active{background:rgba(196,154,60,.28)}
+.weekbar .wlab{flex:1; text-align:center; line-height:1.35; min-width:0}
+.weekbar .wlab b{display:block; font-size:14.5px; font-weight:700; color:var(--ink)}
+.weekbar .wlab i{display:block; font-size:11.5px; font-style:normal; color:var(--gold); font-weight:700}
