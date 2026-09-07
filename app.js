@@ -14,7 +14,7 @@ const FRESH = {
 };
 
 let S = loadState();
-let V = { screen: "home", open: null, picker: null, form: null, sub: "list", openRec: null,
+let V = { week: null, screen: "home", open: null, picker: null, form: null, sub: "list", openRec: null,
   openWeek: null, q: { menu: "", item: "" }, filter: "전체", sort: "name",
   sug: null, focus: null, cond: false, itemForm: null, wipe: false };
 let prevScreen = "home";
@@ -46,6 +46,41 @@ const lab = (s) => { const d = new Date(s + "T00:00:00"); return (d.getMonth() +
 const gap = (a, b) => Math.round((new Date(b + "T00:00:00") - new Date(a + "T00:00:00")) / 864e5);
 const leftOf = (f) => (SHELF[f.c] || 7) - gap(f.bought, today());
 const todayIdx = () => (new Date().getDay() + 6) % 7;
+
+/* 식단을 짜는 시점에 따라 기본 대상 주가 달라야 한다.
+   금·토·일에 짜면 남은 날이 얼마 없으니 다음 주를 기본으로 잡는다. */
+function defaultWeek() {
+  const cur = mondayOf(new Date());
+  return todayIdx() >= 4 ? addDays(cur, 7) : cur;
+}
+/* 지금 화면이 다루는 주. 식단이 있으면 그 주, 없으면 기본값. */
+function targetWeek() {
+  if (V.week) return V.week;
+  if (S.plan && S.weekStart) return S.weekStart;
+  return defaultWeek();
+}
+function weekLabel(ws) {
+  const d = gap(mondayOf(new Date()), ws) / 7;
+  return d === 0 ? "이번 주" : d === 1 ? "다음 주" : d === -1 ? "지난주"
+    : d > 0 ? d + "주 뒤" : -d + "주 전";
+}
+/* 오늘이 그 주의 몇 번째 날인지. 벗어나 있으면 -1. */
+function planDayIdx() {
+  if (!S.plan || !S.weekStart) return -1;
+  const n = gap(S.weekStart, today());
+  return (n >= 0 && n <= 6) ? n : -1;
+}
+/* 그 주가 완전히 지나갔는지 (마지막 날이 어제 이전) */
+function weekEnded() { return S.plan && S.weekStart && gap(S.weekStart, today()) > 6; }
+
+function weekBar() {
+  const ws = targetWeek();
+  return `<div class="weekbar">
+    <button class="wnav" data-a="wshift:-7">‹</button>
+    <div class="wlab"><b>${lab(ws)} ~ ${lab(addDays(ws, 6))}</b><i>${weekLabel(ws)}</i></div>
+    <button class="wnav" data-a="wshift:7">›</button>
+  </div>`;
+}
 
 /* ── 메뉴 조회 (기본 + 내가 만든 것 + 수정분) ── */
 const FALLBACK = { id: "?", name: "비어 있음", min: 0, ing: [], s: [] };
@@ -127,7 +162,7 @@ function ratingOf(id) {
 /* ── 주간 식단 생성 ── */
 function generate() {
   archiveCurrent();
-  const wk = mondayOf(new Date());
+  const wk = targetWeek();
   const { sideDay, outDay } = S.settings;
   const expiring = S.fridge.filter((f) => leftOf(f) <= 2).map((f) => f.n);
   const recent = new Set(S.archive.slice(-2).flatMap((w) => DAYS.map((d) => w.days[d]).filter(Boolean)
@@ -191,7 +226,7 @@ function generate() {
     plan[d] = { type: "집밥", soup: soupOf[d] || null, main: main ? main.id : null, side: side ? side.id : null };
   });
 
-  S.weekStart = wk; S.plan = plan; S.checked = {};
+  S.weekStart = wk; S.plan = plan; S.checked = {}; V.week = null;
   save(); V.screen = "week"; V.open = null; render();
   toast("이번 주 식탁이 정해졌어요");
 }
@@ -269,27 +304,36 @@ const stars = (n, act) => [1, 2, 3, 4, 5].map((k) =>
 
 /* ══ 화면 ══ */
 function homeView() {
-  const p = S.plan && S.plan[DAYS[todayIdx()]];
-  const stale = S.plan && S.weekStart !== mondayOf(new Date());
+  const p = S.plan && S.plan[DAYS[planDayIdx()]];
+  const ended = weekEnded();
+  const di = planDayIdx();
   let h = "";
 
-  if (!S.plan || stale) {
+  if (!S.plan || ended) {
     h += `<div class="hero">
-      <p>${stale ? "지난주 식탁을 보고 있어요.<br>새로 짜면 지난주는 기록에 저장됩니다."
-                 : "이번 주 저녁 일곱 끼를 한 번에 정해 드릴게요.<br>평일 메뉴는 30분을 넘기지 않습니다."}</p>
-      <button class="btn" data-a="gen">이번 주 식탁 짜기</button></div>`;
+      <p>${ended ? "지난 식탁의 기간이 끝났어요.<br>새로 짜면 지난 식단은 기록에 저장됩니다."
+                 : "저녁 일곱 끼를 한 번에 정해 드릴게요.<br>평일 메뉴는 30분을 넘기지 않습니다."}</p>
+      <button class="btn" data-a="go:week">${weekLabel(targetWeek())} 식탁 짜러 가기</button></div>`;
+  } else if (di < 0) {
+    // 다음 주 식단을 미리 짜 둔 경우
+    h += `<div class="hero left">
+      <div class="k">${weekLabel(S.weekStart)} 식단</div>
+      <h2>${lab(S.weekStart)} ~ ${lab(addDays(S.weekStart, 6))}</h2>
+      <div class="sub">오늘은 이 식단에 들어 있지 않아요. 월요일부터 시작합니다.</div>
+      <div class="acts"><button class="mini" data-a="go:week">식단 보기</button>
+        <button class="mini" data-a="go:shop">장보기 목록</button></div></div>`;
   } else {
     const soup = p && p.soup ? getR(p.soup.id) : null;
     const main = p && p.main ? getR(p.main) : null;
     const side = p && p.side ? getR(p.side) : null;
     const mins = (main ? main.min : 0) + (side ? side.min : 0);
     h += `<div class="hero left">
-      <div class="k">오늘 · ${DAYS[todayIdx()]}요일</div>
+      <div class="k">오늘 · ${DAYS[di]}요일</div>
       ${p.type === "외식" ? "<h2>바깥에서 먹는 날</h2>"
         : p.type === "반찬" ? "<h2>반찬 사 오는 날</h2>"
         : `<h2>${esc(main ? main.name : "메뉴 없음")}</h2>`}
       <div class="sub">${soup ? esc(soup.name) : ""}${soup && side ? " · " : ""}${side ? esc(side.name) : ""}</div>
-      ${mins ? `<div class="sub mt">조리 ${mins}분 · 재료값 ${won(dayCost(DAYS[todayIdx()]))}</div>` : ""}
+      ${mins ? `<div class="sub mt">조리 ${mins}분 · 재료값 ${won(dayCost(DAYS[di]))}</div>` : ""}
       <div class="acts"><button class="mini" data-a="go:week">이번 주 전체 보기</button></div>
     </div>`;
   }
@@ -315,10 +359,12 @@ function homeView() {
 }
 
 function weekView() {
-  if (!S.plan) return `<div class="hero"><p>아직 이번 주 식탁이 없습니다.</p><button class="btn" data-a="gen">이번 주 식탁 짜기</button></div>`;
-  const ti = todayIdx(), fresh = S.weekStart === mondayOf(new Date());
+  if (!S.plan) return weekBar() +
+    `<div class="hero"><p>위에서 주를 고르고 아래 버튼을 누르면 7일치가 정해집니다.</p>
+     <button class="btn" data-a="gen">${weekLabel(targetWeek())} 식탁 짜기</button></div>`;
+  const ti = planDayIdx(), fresh = ti >= 0;
   const cs = S.settings;
-  let h = `<button class="cond${V.cond ? " open" : ""}" data-a="cond">
+  let h = weekBar() + `<button class="cond${V.cond ? " open" : ""}" data-a="cond">
       <span>반찬 <b>${cs.sideDay}</b> · 외식 <b>${cs.outDay}</b> · <b>${cs.people}명</b></span>
       <span class="ar">${V.cond ? "⌄" : "›"}</span></button>`;
   if (V.cond) {
@@ -331,8 +377,8 @@ function weekView() {
       `<button class="pill${cs.people === n ? " on" : ""}" data-a="cfg:people:${n}">${n}명</button>`).join("") + `</div>
       <div class="acts"><button class="btn" data-a="gen">이 조건으로 다시 짜기</button></div></div>`;
   }
-  h += `<div class="bar"><span>${lab(S.weekStart)} ~ ${lab(addDays(S.weekStart, 6))}</span>
-    <span class="tot">메뉴 원가 합계 ${won(DAYS.reduce((a, d) => a + dayCost(d), 0))}</span></div>`;
+  h += `<div class="bar"><span>메뉴 원가 합계</span>
+    <span class="tot">${won(DAYS.reduce((a, d) => a + dayCost(d), 0))}</span></div>`;
   h += `<div class="week-list">`;
   h += DAYS.map((d, i) => {
     const p = S.plan[d]; if (!p) return "";
@@ -915,6 +961,13 @@ document.addEventListener("click", (e) => {
   }
   else if (a === "sub") { V.sub = x; V.openRec = null; V.wipe = false; V.sug = null; V.focus = null; }
   else if (a === "cond") V.cond = !V.cond;
+  else if (a === "wshift") {
+    const ws = addDays(targetWeek(), Number(x));
+    if (S.plan) {                       // 이미 짠 식단이면 그 식단의 기간을 옮긴다
+      if (S.archive.some((w) => w.weekStart === ws)) return toast("그 주는 이미 기록에 있어요");
+      S.weekStart = ws; V.week = null; save();
+    } else V.week = ws;
+  }
   else if (a === "filter") { V.filter = decodeURIComponent(x); V.openRec = null; }
   else if (a === "sort") V.sort = x;
   else if (a === "clearq") { V.q[x] = ""; V.focus = null; }
