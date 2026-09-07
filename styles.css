@@ -576,3 +576,96 @@ html, body{
 .day-content.dragging{
   pointer-events:none;                /* 클론이 드롭 판정을 가로채지 않게 */
 }
+
+/* ══════════ 하단 탭바 ══════════ */
+#tabbar{
+  position:fixed; left:0; right:0; bottom:0; z-index:20;
+  display:flex; background:var(--card); border-top:1px solid var(--line);
+  padding-bottom:env(safe-area-inset-bottom);
+}
+#tabbar .tab{
+  flex:1; display:flex; flex-direction:column; align-items:center; gap:2px;
+  background:none; border:none; padding:9px 0 7px; cursor:pointer;
+  font-family:inherit; color:var(--soft);
+}
+#tabbar .tab .material-symbols-rounded{font-size:22px}
+#tabbar .tab i{font-size:10.5px; font-style:normal; font-weight:600; letter-spacing:-.03em; white-space:nowrap}
+#tabbar .tab.on{color:var(--green)}
+main{padding-bottom:96px}
+
+/* 위로가기 */
+#totop{
+  position:fixed; right:16px; bottom:82px; z-index:19;
+  width:42px; height:42px; border-radius:21px; border:1px solid var(--line);
+  background:var(--card); color:var(--soft); cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  opacity:0; pointer-events:none; transition:opacity .18s;
+  box-shadow:0 2px 10px rgba(0,0,0,.08);
+}
+#totop.on{opacity:1; pointer-events:auto}
+
+/* ══════════ 검색 · 필터 ══════════ */
+.searchbar{
+  display:flex; align-items:center; gap:8px; background:var(--card);
+  border:1px solid var(--line); border-radius:8px; padding:0 12px; margin-bottom:10px;
+}
+.searchbar .material-symbols-rounded{font-size:19px; color:var(--soft)}
+.searchbar input{border:none; background:none; padding:11px 0; flex:1}
+.searchbar input:focus{outline:none}
+.chips{display:flex; gap:6px; overflow-x:auto; padding-bottom:8px; margin-bottom:4px; -webkit-overflow-scrolling:touch}
+.chips::-webkit-scrollbar{display:none}
+.chip{
+  flex:0 0 auto; padding:7px 13px; border-radius:16px; border:1px solid var(--line);
+  background:var(--card); color:var(--soft); font-size:12.5px; cursor:pointer; font-family:inherit;
+}
+.chip.on{background:var(--green); border-color:var(--green); color:#fff; font-weight:600}
+.sortrow{display:flex; align-items:center; gap:12px; margin:4px 0 10px}
+.slink{background:none; border:none; font-family:inherit; font-size:12.5px; color:var(--soft); cursor:pointer; padding:2px 0}
+.slink.on{color:var(--ink); font-weight:700; text-decoration:underline; text-underline-offset:3px}
+.sortrow .btn.small{margin-left:auto}
+/* 분류 제목 고정.
+   .grp 안에 갇혀 있어야 다음 분류가 올라올 때 이전 제목이 위로 밀려 사라진다.
+   상단 헤더 높이는 노치 여백을 포함해 계산한다. */
+.grp{position:relative}
+.grp + .grp{margin-top:14px}
+h3.gh.sticky{
+  position:sticky; top:calc(env(safe-area-inset-top) + 50px);
+  background:var(--bg); z-index:5; padding:9px 0 7px; margin:0 0 6px;
+}
+
+/* ══════════ 재료 자동완성 ══════════ */
+.ingwrap{position:relative; flex:1; min-width:0}
+.frow.ingrow{align-items:flex-start; flex-wrap:wrap}
+.sug{
+  position:relative; margin-top:5px; background:var(--card);
+  border:1px solid var(--green); border-radius:8px; padding:8px; width:100%;
+}
+.sughead{font-size:11.5px; color:var(--green); margin-bottom:6px; line-height:1.5}
+.sugi{
+  display:inline-block; margin:0 5px 5px 0; padding:6px 11px; border-radius:14px;
+  border:1px solid var(--line); background:var(--bg); color:var(--ink);
+  font-size:13px; font-family:inherit; cursor:pointer;
+}
+
+/* ══════════ 주간 조건 ══════════ */
+.cond{
+  display:flex; justify-content:space-between; align-items:center; width:100%;
+  background:var(--card); border:1px solid var(--line); border-radius:8px;
+  padding:12px 14px; margin-bottom:10px; font-family:inherit; font-size:13.5px;
+  color:var(--soft); cursor:pointer; text-align:left;
+}
+.cond b{color:var(--ink); font-weight:700}
+.cond.open{border-bottom-left-radius:0; border-bottom-right-radius:0; margin-bottom:0}
+
+/* ══════════ 오늘 화면 알림 ══════════ */
+.notice{
+  display:block; width:100%; text-align:left; font-family:inherit; font-size:13.5px;
+  line-height:1.6; padding:13px 14px; margin-bottom:8px; border-radius:8px;
+  border:none; cursor:pointer; background:var(--card);
+  border-left:4px solid var(--green); color:var(--ink);
+}
+.notice.soon{border-left-color:var(--yolk)}
+.notice.bad{border-left-color:var(--kimchi)}
+.notice.quiet{background:transparent; border:1px dashed var(--line); color:var(--soft)}
+.w90{width:92px; flex-shrink:0}
+.mini.on{border-color:var(--green); color:var(--green)}

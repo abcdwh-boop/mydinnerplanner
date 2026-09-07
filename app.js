@@ -10,11 +10,13 @@ const CATS = Object.keys(SHELF);
 const FRESH = {
   v: 2, weekStart: null, plan: null, fridge: [], checked: {}, extra: [],
   trash: [], loved: [], excluded: [], custom: [], edits: {}, prices: {},
-  lastBackup: null, archive: [], settings: { sideDay: "수", outDay: "금", people: 3 },
+  items: [], lastBackup: null, archive: [], settings: { sideDay: "수", outDay: "금", people: 3 },
 };
 
 let S = loadState();
-let V = { screen: "home", open: null, picker: null, form: null, sub: "list", openRec: null, openWeek: null };
+let V = { screen: "home", open: null, picker: null, form: null, sub: "list", openRec: null,
+  openWeek: null, q: { menu: "", item: "" }, filter: "전체", sort: "name",
+  sug: null, focus: null, cond: false, itemForm: null, wipe: false };
 let prevScreen = "home";
 
 function loadState() {
@@ -29,6 +31,7 @@ function loadState() {
     ["fridge", "extra", "trash", "loved", "excluded", "custom", "archive"]
       .forEach((k) => { if (!Array.isArray(s[k])) s[k] = []; });
     ["checked", "edits", "prices"].forEach((k) => { if (!s[k] || typeof s[k] !== "object") s[k] = {}; });
+    if (!Array.isArray(s.items)) s.items = [];
     return s;
   } catch (e) { return base; }
 }
@@ -58,6 +61,49 @@ function pool(kind) {
 }
 const kindOf = (id) => (SOUPS.some((r) => r.id === id) ? "soup" : MAINS.some((r) => r.id === id) ? "main"
   : SIDES.some((r) => r.id === id) ? "side" : (S.custom.find((c) => c.id === id) || {}).kind || "main");
+
+/* ── 재료 사전 ──
+   메뉴 안에 흩어져 있던 재료를 한 곳으로 모은다.
+   "삼치"와 "손질 삼치"가 따로 노는 걸 막는 근거가 된다. */
+function ingIndex() {
+  const map = {};
+  const put = (n, u, c) => {
+    n = String(n || "").trim(); if (!n) return;
+    if (!map[n]) map[n] = { n: n, u: u || "개", c: c || "채소", uses: 0 };
+  };
+  rawAll().forEach((r) => (getR(r.id).ing || []).forEach((i) => { put(i.n, i.u, i.c); map[i.n].uses++; }));
+  S.items.forEach((i) => put(i.n, i.u, i.c));
+  S.extra.forEach((i) => put(i.n, i.u, i.c));
+  S.fridge.forEach((f) => put(f.n, "개", f.c));
+  Object.keys(S.prices).forEach((n) => put(n));
+  return map;
+}
+const ingNames = () => Object.keys(ingIndex()).sort();
+const isMine = (n) => S.items.some((i) => i.n === n);
+
+/* 입력 중인 글자와 겹치는 재료를 찾는다. 양방향으로 봐서
+   "삼치"를 쳐도 "손질 삼치"가 걸리게 한다. */
+function suggest(q) {
+  q = String(q || "").trim();
+  if (!q) return [];
+  const all = ingNames();
+  if (all.indexOf(q) > -1 && all.filter((n) => n !== q && (n.indexOf(q) > -1)).length === 0) return [];
+  return all.filter((n) => n !== q && (n.indexOf(q) > -1 || q.indexOf(n) > -1)).slice(0, 6);
+}
+
+/* 재료 이름 입력칸. 어디서 쓰든 같은 자동완성이 붙는다. */
+function ingInput(path, value, ph) {
+  const id = "ing-" + path.replace(/[.\[\]]/g, "-");
+  const list = V.sug === path ? suggest(value) : [];
+  return `<div class="ingwrap">
+    <input id="${id}" data-ing="${path}" data-f="${path}" value="${esc(value || "")}"
+      placeholder="${ph || "재료 이름"}" autocomplete="off">
+    ${list.length ? `<div class="sug">
+      <div class="sughead">이미 있는 재료예요. 눌러서 쓰시면 이름이 통일됩니다.</div>
+      ${list.map((n) => `<button class="sugi" data-a="usesug:${encodeURIComponent(path)}:${encodeURIComponent(n)}">${esc(n)}</button>`).join("")}
+    </div>` : ""}
+  </div>`;
+}
 
 /* ── 돈 ── */
 const priceOf = (n) => (S.prices[n] !== undefined ? S.prices[n] : (BASE_PRICES[n] || 0));
@@ -128,7 +174,7 @@ function generate() {
       const s2 = pick(list.length ? list : SP);
       if (!s2) return;
       used.add(s2.id);
-      run.forEach((d, k) => { soupOf[d] = { id: s2.id, age: k + 1 }; });
+      run.forEach((d) => { soupOf[d] = { id: s2.id }; });
     });
   }
 
@@ -162,9 +208,15 @@ function archiveCurrent() {
 /* ── 장보기 ── */
 function shoppingList() {
   const acc = {};
+  const soupIds = [];
+  if (S.plan) DAYS.forEach((d) => {
+    const p = S.plan[d];
+    if (p && p.soup && soupIds.indexOf(p.soup.id) === -1) soupIds.push(p.soup.id);
+  });
   if (S.plan) DAYS.forEach((d) => {
     const p = S.plan[d]; if (!p) return;
-    [p.soup && p.soup.age === 1 ? p.soup.id : null, p.main, p.side].filter(Boolean).forEach((id) => {
+    // 국은 아래에서 따로 한 번씩만 더한다
+    [p.main, p.side].filter(Boolean).forEach((id) => {
       const r = getR(id); if (!r.ing) return;
       r.ing.forEach((i) => {
         const q = qtyFor(i);
@@ -172,6 +224,15 @@ function shoppingList() {
         else if (i.u === "g") { acc[i.n].q += q; acc[i.n].from.push(r.name); }
         else { acc[i.n].q = Math.max(acc[i.n].q, q); acc[i.n].from.push(r.name); }
       });
+    });
+  });
+  soupIds.forEach((id) => {
+    const r = getR(id); if (!r.ing) return;
+    r.ing.forEach((i) => {
+      const q = qtyFor(i);
+      if (!acc[i.n]) acc[i.n] = { n: i.n, q: q, u: i.u, c: i.c, from: [r.name] };
+      else if (i.u === "g") { acc[i.n].q += q; acc[i.n].from.push(r.name); }
+      else { acc[i.n].q = Math.max(acc[i.n].q, q); acc[i.n].from.push(r.name); }
     });
   });
   S.extra.forEach((e) => { acc[e.n] = { n: e.n, q: e.q, u: e.u, c: e.c, from: ["직접 추가"], extra: true }; });
@@ -210,59 +271,79 @@ const stars = (n, act) => [1, 2, 3, 4, 5].map((k) =>
 function homeView() {
   const p = S.plan && S.plan[DAYS[todayIdx()]];
   const stale = S.plan && S.weekStart !== mondayOf(new Date());
-  let hero = "";
-  if (!S.plan) {
-    hero = `<div class="hero"><p>이번 주 저녁 일곱 끼를 한 번에 정해 드릴게요.<br>국은 세 번만 끓이고, 평일 메뉴는 30분을 넘기지 않습니다.</p>
-      <button class="btn" data-a="gen">이번 주 식탁 짜기</button></div>`;
-  } else if (stale) {
-    hero = `<div class="hero"><p>지난주 식탁을 보고 있어요.<br>새로 짜면 지난주 식단은 [지난 메뉴]에 저장됩니다.</p>
+  let h = "";
+
+  if (!S.plan || stale) {
+    h += `<div class="hero">
+      <p>${stale ? "지난주 식탁을 보고 있어요.<br>새로 짜면 지난주는 기록에 저장됩니다."
+                 : "이번 주 저녁 일곱 끼를 한 번에 정해 드릴게요.<br>평일 메뉴는 30분을 넘기지 않습니다."}</p>
       <button class="btn" data-a="gen">이번 주 식탁 짜기</button></div>`;
   } else {
     const soup = p && p.soup ? getR(p.soup.id) : null;
     const main = p && p.main ? getR(p.main) : null;
-    hero = `<div class="hero left">
+    const side = p && p.side ? getR(p.side) : null;
+    const mins = (main ? main.min : 0) + (side ? side.min : 0);
+    h += `<div class="hero left">
       <div class="k">오늘 · ${DAYS[todayIdx()]}요일</div>
-      ${p && p.type === "외식" ? "<h2>바깥에서 먹는 날</h2>" :
-        p && p.type === "반찬" ? "<h2>반찬 사 오는 날</h2>" :
-        `<h2>${esc(main ? main.name : "메뉴 없음")}</h2>`}
-      <div class="sub">${soup ? esc(soup.name) + (p.soup.age > 1 ? " " + p.soup.age + "일차" : "") : "국 없음"}
-        ${p && p.side ? " · " + esc(getR(p.side).name) : ""}</div>
-      <div class="sub mt">이번 주 예상 지출 ${won(weekCost())}</div>
+      ${p.type === "외식" ? "<h2>바깥에서 먹는 날</h2>"
+        : p.type === "반찬" ? "<h2>반찬 사 오는 날</h2>"
+        : `<h2>${esc(main ? main.name : "메뉴 없음")}</h2>`}
+      <div class="sub">${soup ? esc(soup.name) : ""}${soup && side ? " · " : ""}${side ? esc(side.name) : ""}</div>
+      ${mins ? `<div class="sub mt">조리 ${mins}분 · 재료값 ${won(dayCost(DAYS[todayIdx()]))}</div>` : ""}
+      <div class="acts"><button class="mini" data-a="go:week">이번 주 전체 보기</button></div>
     </div>`;
   }
-  const exp = S.fridge.filter((f) => leftOf(f) <= 2 && leftOf(f) >= 0);
+
   const over = S.fridge.filter((f) => leftOf(f) < 0);
-  const items = [
-    ["week", "calendar_month", "이번 주 식단", S.plan ? "7일치 메뉴" : "아직 없어요"],
-    ["shop", "shopping_bag", "장보기", S.plan ? shoppingList().filter((i) => !i.have).length + "가지" : "식단 먼저"],
-    ["fridge", "kitchen", "냉장고", S.fridge.length ? S.fridge.length + "가지" : "비어 있음"],
-    ["menu", "menu_book", "메뉴 관리", pool("soup").length + pool("main").length + pool("side").length + "개"],
-    ["past", "history", "지난 메뉴", S.archive.length ? S.archive.length + "주" : "기록 없음"],
-  ];
-  return hero + `<nav class="grid-menu">` + items.map(([k, icon, t, s]) =>
-    `<button class="grid-item" data-a="go:${k}">
-      <span class="gi-icon material-symbols-rounded">${icon}</span>
-      <span class="gi-label">${t}</span>
-      <span class="gi-sub">${esc(s)}</span>
-    </button>`).join("") + `</nav>`;
+  const soon = S.fridge.filter((f) => leftOf(f) <= 2 && leftOf(f) >= 0);
+  if (over.length || soon.length) {
+    h += `<button class="notice ${over.length ? "bad" : "soon"}" data-a="go:fridge">
+      ${over.length ? `기한이 지난 재료 ${over.length}가지를 정리해 주세요`
+                    : `<b>${soon.slice(0, 3).map((f) => esc(f.n)).join(", ")}</b>, 이틀 안에 쓰는 게 좋아요`}</button>`;
+  }
+  if (S.plan) {
+    const buy = shoppingList().filter((i) => !i.have && !S.checked[i.n]).length;
+    if (buy) h += `<button class="notice" data-a="go:shop">아직 못 산 재료가 ${buy}가지 있어요 · ${won(weekCost())}</button>`;
+  }
+  if (S.archive.length >= 3 && (!S.lastBackup || gap(S.lastBackup, today()) > 30)) {
+    h += `<button class="notice quiet" data-a="gobk">기록이 ${S.archive.length}주 쌓였어요. 백업해 두시겠어요?</button>`;
+  }
+  if (S.archive.length) {
+    h += `<div class="acts"><button class="mini" data-a="go:past">지난 메뉴와 별점 보기</button></div>`;
+  }
+  return h;
 }
 
 function weekView() {
   if (!S.plan) return `<div class="hero"><p>아직 이번 주 식탁이 없습니다.</p><button class="btn" data-a="gen">이번 주 식탁 짜기</button></div>`;
   const ti = todayIdx(), fresh = S.weekStart === mondayOf(new Date());
-  let h = `<div class="bar"><span>${lab(S.weekStart)} ~ ${lab(addDays(S.weekStart, 6))}</span>
+  const cs = S.settings;
+  let h = `<button class="cond${V.cond ? " open" : ""}" data-a="cond">
+      <span>반찬 <b>${cs.sideDay}</b> · 외식 <b>${cs.outDay}</b> · <b>${cs.people}명</b></span>
+      <span class="ar">${V.cond ? "⌄" : "›"}</span></button>`;
+  if (V.cond) {
+    h += `<div class="card pad">`;
+    [["sideDay", "반찬 사는 날"], ["outDay", "외식하는 날"]].forEach(([k, l]) => {
+      h += `<div class="fl">${l}</div><div class="pills">` + DAYS.concat("없음").map((d) =>
+        `<button class="pill${cs[k] === d ? " on" : ""}" data-a="cfg:${k}:${d}">${d}</button>`).join("") + `</div>`;
+    });
+    h += `<div class="fl">식구 수</div><div class="pills">` + [2, 3, 4, 5].map((n) =>
+      `<button class="pill${cs.people === n ? " on" : ""}" data-a="cfg:people:${n}">${n}명</button>`).join("") + `</div>
+      <div class="acts"><button class="btn" data-a="gen">이 조건으로 다시 짜기</button></div></div>`;
+  }
+  h += `<div class="bar"><span>${lab(S.weekStart)} ~ ${lab(addDays(S.weekStart, 6))}</span>
     <span class="tot">메뉴 원가 합계 ${won(DAYS.reduce((a, d) => a + dayCost(d), 0))}</span></div>`;
   h += `<div class="week-list">`;
   h += DAYS.map((d, i) => {
     const p = S.plan[d]; if (!p) return "";
     const soup = p.soup ? getR(p.soup.id) : null, main = p.main ? getR(p.main) : null, side = p.side ? getR(p.side) : null;
-    const mins = (p.soup && p.soup.age === 1 ? soup.min : 0) + (main ? main.min : 0) + (side ? side.min : 0);
+    const mins = (main ? main.min : 0) + (side ? side.min : 0);
     const open = V.open === d;
     let body;
     if (p.type === "외식") body = `<div class="mn dim">바깥에서 먹는 날</div>`;
-    else if (p.type === "반찬") body = `<div class="mn">반찬 사 오는 날</div><div class="sb">${soup ? esc(soup.name) + (p.soup.age > 1 ? " " + p.soup.age + "일차" : "") + " · " : ""}밥과 국만</div>`;
+    else if (p.type === "반찬") body = `<div class="mn">반찬 사 오는 날</div><div class="sb">${soup ? esc(soup.name) + " · " : ""}밥과 국만</div>`;
     else body = `<div class="mn">${esc(main ? main.name : "메뉴를 골라 주세요")}</div>
-      <div class="sb">${soup ? esc(soup.name) + (p.soup.age > 1 ? " " + p.soup.age + "일차" : "") : ""}${soup && side ? " · " : ""}${side ? esc(side.name) : ""}</div>`;
+      <div class="sb">${soup ? esc(soup.name) : ""}${soup && side ? " · " : ""}${side ? esc(side.name) : ""}</div>`;
     return `<div class="day-row" data-day="${d}">
       <div class="day-label${i === ti && fresh ? ' today' : ''}">
         <b>${d}</b><i>${lab(addDays(S.weekStart, i))}</i>
@@ -285,10 +366,9 @@ function weekView() {
 
 function dayDetail(d, p) {
   const cards = [];
-  if (p.soup && p.soup.age === 1) cards.push(getR(p.soup.id));
+  if (p.soup) cards.push(getR(p.soup.id));
   if (p.main) cards.push(getR(p.main));
   let h = `<div class="detail">`;
-  if (p.soup && p.soup.age > 1) h += `<p class="note">${esc(getR(p.soup.id).name)}은 이미 냉장고에 있어요. 데우기만 하면 됩니다.</p>`;
   if (p.type === "반찬") h += `<p class="note">주문해볼 만한 것: ${BUY_SIDES.slice(0, 5).join(", ")}</p>`;
   cards.filter((r) => r.s && r.s.length).forEach((r) => {
     h += `<div class="rec"><b>${esc(r.name)}</b> <span class="dim">${won(costOf(r))}</span>
@@ -332,7 +412,7 @@ function shopView() {
     h += `</div>`;
   });
   h += `<h3 class="gh">직접 추가</h3><div class="card pad">
-    <div class="frow"><input data-f="ex.n" placeholder="재료 이름 (예: 우유)">
+    <div class="frow ingrow">${ingInput("ex.n", TMP.ex.n, "재료 이름 (예: 우유)")}
       <input data-f="ex.q" value="1" class="w50"><select data-f="ex.u" class="w70">${UNITS.map((u) => `<option${u === "개" ? " selected" : ""}>${u}</option>`).join("")}</select>
       <select data-f="ex.c" class="w80">${CATS.map((c) => `<option${c === "채소" ? " selected" : ""}>${c}</option>`).join("")}</select></div>
     <button class="btn small" data-a="addextra">목록에 넣기</button></div>
@@ -352,7 +432,7 @@ function fridgeView() {
       <button class="mini" data-a="used:${f.id}">다 씀</button><button class="mini" data-a="trash:${f.id}">버림</button></div>`;
   }).join("");
   h += `<h3 class="gh">직접 넣기</h3><div class="card pad">
-    <div class="frow"><input data-f="fr.n" placeholder="재료 이름">
+    <div class="frow ingrow">${ingInput("fr.n", TMP.fr.n, "재료 이름")}
       <input data-f="fr.q" placeholder="수량" class="w70">
       <select data-f="fr.c" class="w80">${CATS.map((c) => `<option${c === "채소" ? " selected" : ""}>${c}</option>`).join("")}</select></div>
     <button class="btn small" data-a="fridgeadd">냉장고에 넣기</button></div>`;
@@ -365,56 +445,140 @@ function fridgeView() {
   return h;
 }
 
+const MFILTERS = ["전체", "국", "메인", "곁들임", "고기", "생선", "20분 이하", "내 메뉴"];
+const SORTS = [["name", "이름순"], ["cost", "원가순"], ["rating", "별점순"], ["unused", "안 나온 순"]];
+
+function matchFilter(r, kind) {
+  const f = V.filter;
+  if (f === "전체") return true;
+  if (f === "국") return kind === "soup";
+  if (f === "메인") return kind === "main";
+  if (f === "곁들임") return kind === "side";
+  if (f === "고기") return ["돼지", "소", "닭", "오리"].indexOf(r.p) > -1;
+  if (f === "생선") return r.p === "생선";
+  if (f === "20분 이하") return r.min <= 20;
+  if (f === "내 메뉴") return r.id[0] === "c";
+  return true;
+}
+function sortMenus(list) {
+  const cp = list.slice();
+  if (V.sort === "cost") return cp.sort((a, b) => costOf(b) - costOf(a));
+  if (V.sort === "rating") return cp.sort((a, b) => (ratingOf(b.id) || 0) - (ratingOf(a.id) || 0));
+  if (V.sort === "unused") {
+    const seen = {};
+    S.archive.forEach((w, wi) => DAYS.forEach((d) => {
+      const p = w.days[d]; if (!p) return;
+      [p.main, p.side, p.soup && p.soup.id].filter(Boolean).forEach((id) => { if (seen[id] === undefined) seen[id] = wi; });
+    }));
+    return cp.sort((a, b) => (seen[b.id] === undefined ? 999 : seen[b.id]) - (seen[a.id] === undefined ? 999 : seen[a.id]));
+  }
+  return cp.sort((a, b) => a.name.localeCompare(b.name, "ko"));
+}
+
+function menuRow(r, kind) {
+  const ex = S.excluded.indexOf(r.id) > -1, lo = S.loved.indexOf(r.id) > -1;
+  const op = V.openRec === r.id, mine = r.id[0] === "c", ed = !!S.edits[r.id];
+  const rt = ratingOf(r.id);
+  let h = `<div class="mi${ex ? " off" : ""}"><div class="mrow">
+    <button class="mname" data-a="rec:${r.id}">${esc(r.name)}
+      ${mine ? '<i class="tag">내 메뉴</i>' : ed ? '<i class="tag">수정함</i>' : ""}
+      ${rt ? `<i class="tag star">★${rt.toFixed(1)}</i>` : ""}</button>
+    <span class="dim">${r.min}분 · ${won(costOf(r))}</span></div>`;
+  if (op) h += `<div class="mdet">
+    <div class="ings">${r.ing.length ? r.ing.map((i) => esc(i.n) + " " + i.q + i.u).join("  ·  ") : "등록된 재료가 없습니다"}</div>
+    ${r.s && r.s.length ? "<ol>" + r.s.map((x) => "<li>" + esc(x) + "</li>").join("") + "</ol>" : ""}
+    ${r.tip ? `<div class="tip">${esc(r.tip)}</div>` : ""}
+    <div class="acts">
+      <button class="mini${lo ? " on" : ""}" data-a="love:${r.id}">${lo ? "자주 나오게 ✓" : "자주 나오게"}</button>
+      <button class="mini" data-a="excl:${r.id}">${ex ? "다시 넣기" : "빼기"}</button>
+      <button class="mini" data-a="edit:${r.id}">수정</button>
+      ${mine ? `<button class="mini" data-a="delrec:${r.id}">삭제</button>`
+             : ed ? `<button class="mini" data-a="reset:${r.id}">원래대로</button>` : ""}
+    </div></div>`;
+  return h + `</div>`;
+}
+
+function menuListView() {
+  const q = (V.q.menu || "").trim();
+  let h = `<div class="searchbar">
+    <span class="material-symbols-rounded">search</span>
+    <input id="q-menu" data-f="q.menu" value="${esc(q)}" placeholder="메뉴 이름이나 재료로 찾기" autocomplete="off">
+    ${q ? `<button class="x" data-a="clearq:menu">×</button>` : ""}
+  </div>
+  <div class="chips">${MFILTERS.map((f) => `<button class="chip${V.filter === f ? " on" : ""}" data-a="filter:${f}">${f}</button>`).join("")}</div>
+  <div class="sortrow">${SORTS.map(([k, l]) => `<button class="slink${V.sort === k ? " on" : ""}" data-a="sort:${k}">${l}</button>`).join("")}
+    <button class="btn small" data-a="new:main">＋ 새 메뉴</button></div>`;
+
+  const hit = (r) => !q || r.name.indexOf(q) > -1 || (r.ing || []).some((i) => i.n.indexOf(q) > -1);
+  const groups = KINDS.map(([k, l]) => [l, k, sortMenus(pool(k).filter((r) => hit(r) && matchFilter(r, k)))]);
+  const total = groups.reduce((a, g) => a + g[2].length, 0);
+  if (!total) return h + `<p class="lead mt">찾는 메뉴가 없어요. 검색어를 지우거나 필터를 「전체」로 바꿔 보세요.</p>`;
+
+  groups.forEach(([l, k, list]) => {
+    if (!list.length) return;
+    // 헤더와 목록을 한 덩어리로 묶어야 다음 분류가 올라올 때 이전 헤더가 밀려난다
+    h += `<section class="grp"><h3 class="gh sticky">${l} <span class="dim">${list.length}</span></h3><div class="card">`;
+    list.forEach((r) => { h += menuRow(r, k); });
+    h += `</div></section>`;
+  });
+  return h;
+}
+
+function itemView() {
+  const idx = ingIndex();
+  const q = (V.q.item || "").trim();
+  let h = `<div class="searchbar">
+    <span class="material-symbols-rounded">search</span>
+    <input id="q-item" data-f="q.item" value="${esc(q)}" placeholder="재료 이름으로 찾기" autocomplete="off">
+    ${q ? `<button class="x" data-a="clearq:item">×</button>` : ""}
+  </div>`;
+
+  if (V.itemForm) {
+    const f = V.itemForm;
+    h += `<div class="card pad">
+      <div class="fl">${f.old ? "재료 수정" : "새 재료"}</div>
+      ${ingInput("itemForm.n", f.n, "재료 이름")}
+      <div class="frow mt">
+        <select data-f="itemForm.u" class="w80">${UNITS.map((u) => `<option${u === f.u ? " selected" : ""}>${u}</option>`).join("")}</select>
+        <select data-f="itemForm.c" class="w90">${CATS.map((c) => `<option${c === f.c ? " selected" : ""}>${c}</option>`).join("")}</select>
+        <input data-f="itemForm.price" value="${f.price}" class="w80" placeholder="가격"><span class="dim">원</span>
+      </div>
+      <p class="hint">g 단위 재료는 1g당 가격, 나머지는 1단위당 가격입니다.</p>
+      <div class="acts"><button class="btn" data-a="itemsave">저장</button>
+        <button class="btn ghost" data-a="itemcancel">취소</button></div>
+    </div>`;
+  } else {
+    h += `<div class="sortrow"><span class="dim">${Object.keys(idx).length}가지</span>
+      <button class="btn small" data-a="itemnew">＋ 재료 추가</button></div>`;
+  }
+
+  const names = Object.keys(idx).filter((n) => !q || n.indexOf(q) > -1).sort();
+  const byGroup = {};
+  names.forEach((n) => { const g = GROUP[idx[n].c] || "기타"; (byGroup[g] = byGroup[g] || []).push(n); });
+  GROUP_ORDER.concat("기타").forEach((g) => {
+    const list = byGroup[g]; if (!list || !list.length) return;
+    h += `<section class="grp"><h3 class="gh sticky">${g} <span class="dim">${list.length}</span></h3><div class="card">`;
+    list.forEach((n) => {
+      const i = idx[n];
+      h += `<div class="li"><span class="ln">${esc(n)}
+        <i class="dim">${i.u === "g" ? "1g당" : "1" + i.u + "당"} · ${i.c}${i.uses ? " · 메뉴 " + i.uses + "개" : ""}${isMine(n) ? " · 직접 추가" : ""}</i></span>
+        <span class="lq"><input class="pin" type="number" data-price="${esc(n)}" value="${priceOf(n)}">원</span>
+        <button class="mini" data-a="itemedit:${encodeURIComponent(n)}">수정</button></div>`;
+    });
+    h += `</div></section>`;
+  });
+  if (!names.length) h += `<p class="lead mt">찾는 재료가 없어요.</p>`;
+  return h;
+}
+
 function menuView() {
   if (V.form) return formView();
-  let h = `<div class="tabs"><button class="tb${V.sub === "list" ? " on" : ""}" data-a="sub:list">메뉴</button>
-    <button class="tb${V.sub === "price" ? " on" : ""}" data-a="sub:price">재료 가격</button>
-    <button class="tb${V.sub === "data" ? " on" : ""}" data-a="sub:data">백업</button></div>`;
+  const tabs = [["list", "메뉴"], ["item", "재료"], ["data", "백업"]];
+  let h = `<div class="tabs">${tabs.map(([k, l]) =>
+    `<button class="tb${V.sub === k ? " on" : ""}" data-a="sub:${k}">${l}</button>`).join("")}</div>`;
   if (V.sub === "data") return h + dataView();
-  if (V.sub === "price") {
-    const names = {};
-    rawAll().forEach((r) => (getR(r.id).ing || []).forEach((i) => names[i.n] = i));
-    S.extra.forEach((e) => names[e.n] = e);
-    h += `<p class="lead">g 단위 재료는 1g당, 나머지는 1단위당 가격입니다. 고치면 메뉴 원가와 예산에 바로 반영돼요.</p><div class="card">`;
-    Object.keys(names).sort().forEach((n) => {
-      const i = names[n];
-      h += `<div class="li"><span class="ln">${esc(n)} <i class="dim">${i.u === "g" ? "1g" : "1" + i.u}${inBudget(i.c) ? "" : " · 예산 제외"}</i></span>
-        <span class="lq"><input class="pin" type="number" data-price="${esc(n)}" value="${priceOf(n)}">원</span></div>`;
-    });
-    h += `</div>`;
-    return h;
-  }
-  h += `<div class="acts"><button class="btn" data-a="new:main">새 메뉴 만들기</button></div>`;
-  KINDS.forEach(([k, l]) => {
-    h += `<h3 class="gh">${l}</h3><div class="card">`;
-    pool(k).forEach((r) => {
-      const ex = S.excluded.indexOf(r.id) > -1, lo = S.loved.indexOf(r.id) > -1;
-      const op = V.openRec === r.id, mine = r.id[0] === "c", ed = !!S.edits[r.id];
-      const rt = ratingOf(r.id);
-      h += `<div class="mi${ex ? " off" : ""}"><div class="mrow">
-        <button class="mname" data-a="rec:${r.id}">${esc(r.name)}
-          ${mine ? '<i class="tag">내 메뉴</i>' : ed ? '<i class="tag">수정함</i>' : ""}
-          ${rt ? `<i class="tag star">★${rt.toFixed(1)}</i>` : ""}</button>
-        <span class="dim">${r.min}분 · ${won(costOf(r))}</span>
-        <button class="hb${lo ? " on" : ""}" data-a="love:${r.id}">♥</button>
-        <button class="mini" data-a="excl:${r.id}">${ex ? "되돌리기" : "빼기"}</button></div>`;
-      if (op) h += `<div class="mdet"><div class="ings">${r.ing.length ? r.ing.map((i) => esc(i.n) + " " + i.q + i.u).join("  ·  ") : "등록된 재료가 없습니다"}</div>
-        ${r.s && r.s.length ? "<ol>" + r.s.map((x) => "<li>" + esc(x) + "</li>").join("") + "</ol>" : ""}
-        ${r.tip ? `<div class="tip">${esc(r.tip)}</div>` : ""}
-        <div class="acts"><button class="mini" data-a="edit:${r.id}">수정</button>
-        ${mine ? `<button class="mini" data-a="delrec:${r.id}">삭제</button>` : ed ? `<button class="mini" data-a="reset:${r.id}">원래대로</button>` : ""}</div></div>`;
-      h += `</div>`;
-    });
-    h += `</div>`;
-  });
-  h += `<h3 class="gh">주간 설정</h3><div class="card pad">`;
-  [["sideDay", "반찬 사는 날"], ["outDay", "외식하는 날"]].forEach(([k, l]) => {
-    h += `<div class="fl">${l}</div><div class="pills">` + DAYS.concat("없음").map((d) =>
-      `<button class="pill${S.settings[k] === d ? " on" : ""}" data-a="cfg:${k}:${d}">${d}</button>`).join("") + `</div>`;
-  });
-  h += `<div class="fl">식구 수</div><div class="pills">` + [2, 3, 4, 5].map((n) =>
-    `<button class="pill${S.settings.people === n ? " on" : ""}" data-a="cfg:people:${n}">${n}명</button>`).join("") + `</div></div>`;
-  return h;
+  if (V.sub === "item") return h + itemView();
+  return h + menuListView();
 }
 
 function dataView() {
@@ -498,7 +662,7 @@ function normalize(obj) {
   const base = JSON.parse(JSON.stringify(FRESH));
   const s = Object.assign(base, obj);
   s.settings = Object.assign({}, FRESH.settings, obj.settings || {});
-  ["fridge", "extra", "trash", "loved", "excluded", "custom", "archive"]
+  ["fridge", "extra", "trash", "loved", "excluded", "custom", "archive", "items"]
     .forEach((k) => { if (!Array.isArray(s[k])) s[k] = []; });
   ["checked", "edits", "prices"].forEach((k) => { if (!s[k] || typeof s[k] !== "object") s[k] = {}; });
   return s;
@@ -552,8 +716,8 @@ function formView() {
     <div class="frow mt"><span class="fl">조리 시간</span><input data-f="form.min" value="${f.min}" class="w70">분</div>
     <p class="hint">30분이 넘으면 평일에는 배정하지 않고 주말에만 올립니다.</p>
     <div class="fl mt">필요한 재료</div>
-    ${f.ing.map((g, ix) => `<div class="frow">
-      <input data-f="form.ing.${ix}.n" value="${esc(g.n)}" placeholder="재료">
+    ${f.ing.map((g, ix) => `<div class="frow ingrow">
+      ${ingInput("form.ing." + ix + ".n", g.n, "재료")}
       <input data-f="form.ing.${ix}.q" value="${g.q}" class="w50">
       <select data-f="form.ing.${ix}.u" class="w70">${UNITS.map((u) => `<option${u === g.u ? " selected" : ""}>${u}</option>`).join("")}</select>
       <select data-f="form.ing.${ix}.c" class="w80">${CATS.map((c) => `<option${c === g.c ? " selected" : ""}>${c}</option>`).join("")}</select>
@@ -592,50 +756,55 @@ function pastView() {
 }
 
 /* ══ 뒤로가기 ══
-   화면·시트·폼이 열리고 닫히는 것을 히스토리 한 칸으로 취급한다.
-   그래야 기기의 뒤로가기가 앱을 끄는 대신 이전 화면으로 돌아간다. */
-function routeSig() {
-  return [V.screen, V.sub, V.picker ? V.picker.day + V.picker.slot : "", V.form ? "form" : ""].join("|");
-}
-function routeSnap() {
-  return { screen: V.screen, sub: V.sub, picker: V.picker, form: !!V.form,
-    open: V.open, openRec: V.openRec, openWeek: V.openWeek };
-}
-let lastSig = null;
-function syncHistory() {
-  const cur = routeSig();
-  if (lastSig === null) { history.replaceState({ r: routeSnap() }, ""); lastSig = cur; return; }
-  if (cur !== lastSig) { history.pushState({ r: routeSnap() }, ""); lastSig = cur; }
-}
-window.addEventListener("popstate", function (e) {
-  const r = e.state && e.state.r;
-  if (!r) { V.screen = "home"; V.picker = null; V.form = null; }
-  else {
-    V.screen = r.screen || "home"; V.sub = r.sub || "list";
-    V.picker = r.picker || null;
-    if (!r.form) V.form = null;          // 폼에서 뒤로 = 취소
-    V.open = r.open; V.openRec = r.openRec; V.openWeek = r.openWeek;
-  }
-  lastSig = routeSig();                   // 되돌아온 위치를 기준으로 삼아 다시 밀어넣지 않는다
+   히스토리에 여분 칸을 하나 두고, 뒤로가기가 그 칸을 소비할 때마다
+   열린 창을 닫거나 홈으로 보낸다. 예전처럼 지나간 화면 상태를 되살리지 않는다. */
+function pushGuard() { history.pushState({ guard: 1 }, ""); }
+let exitHint = 0;
+window.addEventListener("popstate", function () {
   cleanupDrag();
-  render();
+  if (V.picker || V.form || V.itemForm || V.sug) {
+    V.picker = null; V.form = null; V.itemForm = null; V.sug = null;
+    render(); pushGuard(); return;
+  }
+  if (V.screen !== "home") {
+    V.screen = "home"; V.sub = "list"; V.open = null; V.openRec = null; V.openWeek = null;
+    render(); pushGuard(); return;
+  }
+  if (Date.now() - exitHint > 2000) {         // 홈에서는 한 번 더 눌러야 닫힌다
+    exitHint = Date.now(); toast("한 번 더 누르면 앱이 닫힙니다"); pushGuard();
+  }
 });
 
+/* ══ 하단 탭바 ══ */
+const TABS = [["home", "wb_twilight", "오늘"], ["week", "calendar_month", "식단"],
+  ["shop", "shopping_bag", "장보기"], ["fridge", "kitchen", "냉장고"], ["menu", "menu_book", "메뉴관리"]];
+function tabbarHTML() {
+  const cur = V.screen === "past" ? "week" : V.screen;
+  return TABS.map(([k, ic, l]) => `<button class="tab${cur === k ? " on" : ""}" data-a="go:${k}">
+    <span class="material-symbols-rounded">${ic}</span><i>${l}</i></button>`).join("");
+}
+
 /* ══ 렌더 ══ */
-const TITLES = { home: "저녁 식탁", week: "이번 주 식단", shop: "장보기", fridge: "냉장고 관리", menu: "메뉴 관리", past: "지난 메뉴" };
+const TITLES = { home: "오늘 저녁", week: "이번 주 식단", shop: "장보기", fridge: "냉장고 관리", menu: "메뉴 관리", past: "지난 메뉴" };
 function render() {
   cleanupDrag();          // 화면을 다시 그리기 전에 떠 있는 클론을 없앤다
-  syncHistory();
   const app = document.getElementById("app");
   document.getElementById("title").textContent = TITLES[V.screen];
-  document.getElementById("back").style.visibility = V.screen === "home" ? "hidden" : "visible";
+  // 탭바가 있으므로 ‹ 는 되돌릴 곳이 있을 때만
+  document.getElementById("back").style.visibility = (V.form || V.screen === "past") ? "visible" : "hidden";
   app.innerHTML = { home: homeView, week: weekView, shop: shopView, fridge: fridgeView, menu: menuView, past: pastView }[V.screen]();
   document.getElementById("sheet").innerHTML = V.picker ? pickerHTML() : "";
   document.getElementById("sheet").className = V.picker ? "on" : "";
-  // 화면이 바뀔 때만 스크롤 초기화
-  if (prevScreen !== V.screen) {
+  document.getElementById("tabbar").innerHTML = tabbarHTML();
+  // 화면(또는 하위 탭)이 바뀔 때만 스크롤 초기화
+  if (prevScreen !== V.screen + "/" + V.sub) {
     window.scrollTo(0, 0);
-    prevScreen = V.screen;
+    prevScreen = V.screen + "/" + V.sub;
+  }
+  // 검색·재료를 입력하는 중에는 다시 그려도 커서를 잃지 않게
+  if (V.focus) {
+    const el = document.getElementById(V.focus);
+    if (el) { el.focus(); if (el.setSelectionRange) { const n = String(el.value).length; el.setSelectionRange(n, n); } }
   }
   // 주간 식단 화면이면 드래그 앤 드롭 초기화
   if (V.screen === 'week') initDrag();
@@ -650,15 +819,39 @@ function pickerHTML() {
         <span class="pi">${r.ing.map((i) => esc(i.n)).join(" · ")}</span></button>`).join("") + `</div>`;
 }
 
-/* ══ 입력 ══ */
+/* ══ 입력 ══
+   한글은 자음과 모음이 합쳐지는 "조합" 과정을 거친다.
+   그 도중에 화면을 다시 그리면 입력칸이 통째로 새로 만들어지면서
+   조합 중이던 글자가 깨진다("삼치" → "ㅅㅏㅁㅊㅣ").
+   그래서 조합 중에는 그리지 않고, 손이 멎은 뒤에 한 번만 그린다. */
+let composing = false;
+let renderTimer = null;
+document.addEventListener("compositionstart", function () { composing = true; });
+document.addEventListener("compositionend", function () { composing = false; });
+function lazyRender(ms) {
+  clearTimeout(renderTimer);
+  renderTimer = setTimeout(function () {
+    if (composing) { lazyRender(180); return; }   // 아직 조합 중이면 조금 더 기다린다
+    render();
+  }, ms || 320);
+}
+
 const TMP = { ex: { n: "", q: "1", u: "개", c: "채소" }, fr: { n: "", q: "", c: "채소" }, imp: { t: "" } };
 document.addEventListener("input", (e) => {
   const f = e.target.dataset.f; if (!f) return;
+  // 검색창
+  if (f.indexOf("q.") === 0) {
+    V.q[f.slice(2)] = e.target.value; V.focus = e.target.id; lazyRender(); return;
+  }
   const parts = f.split(".");
   if (parts[0] === "form") {
     if (parts[1] === "ing") V.form.ing[+parts[2]][parts[3]] = e.target.value;
     else V.form[parts[1]] = e.target.value;
   } else TMP[parts[0]][parts[1]] = e.target.value;
+  // 재료 이름이면 후보를 띄운다
+  if (e.target.dataset.ing) {
+    V.sug = e.target.dataset.ing; V.focus = e.target.id; lazyRender();
+  }
 });
 document.addEventListener("change", (e) => {
   const p = e.target.dataset.price;
@@ -673,6 +866,8 @@ document.addEventListener("change", (e) => {
 
 document.addEventListener("click", (e) => {
   const b = e.target.closest("[data-a]"); if (!b) return;
+  clearTimeout(renderTimer);          // 대기 중이던 그리기는 버린다
+  composing = false;
   const [a, x, y, z] = b.dataset.a.split(":");
 
   if (a === "go") { V.screen = x; V.open = null; V.form = null; }
@@ -718,7 +913,41 @@ document.addEventListener("click", (e) => {
     S.fridge.push({ id: Math.random().toString(36).slice(2), n: TMP.fr.n.trim(), c: TMP.fr.c, q: TMP.fr.q, bought: today() });
     TMP.fr.n = ""; TMP.fr.q = ""; save();
   }
-  else if (a === "sub") { V.sub = x; V.openRec = null; V.wipe = false; }
+  else if (a === "sub") { V.sub = x; V.openRec = null; V.wipe = false; V.sug = null; V.focus = null; }
+  else if (a === "cond") V.cond = !V.cond;
+  else if (a === "filter") { V.filter = decodeURIComponent(x); V.openRec = null; }
+  else if (a === "sort") V.sort = x;
+  else if (a === "clearq") { V.q[x] = ""; V.focus = null; }
+  else if (a === "usesug") {
+    const path = decodeURIComponent(x), name = decodeURIComponent(y);
+    const parts = path.split(".");
+    if (parts[0] === "form") V.form.ing[+parts[2]].n = name;
+    else if (parts[0] === "itemForm") V.itemForm.n = name;
+    else TMP[parts[0]][parts[1]] = name;
+    const known = ingIndex()[name];   // 이미 아는 재료면 단위·분류도 맞춘다
+    if (known) {
+      if (parts[0] === "form") { V.form.ing[+parts[2]].u = known.u; V.form.ing[+parts[2]].c = known.c; }
+      else if (parts[0] === "itemForm") { V.itemForm.u = known.u; V.itemForm.c = known.c; }
+      else if (TMP[parts[0]]) { if ("u" in TMP[parts[0]]) TMP[parts[0]].u = known.u; TMP[parts[0]].c = known.c; }
+    }
+    V.sug = null; V.focus = null;
+  }
+  else if (a === "itemnew") { V.itemForm = { n: "", u: "개", c: "채소", price: 0, old: null }; V.sug = null; }
+  else if (a === "itemedit") {
+    const n = decodeURIComponent(x), i = ingIndex()[n];
+    V.itemForm = { n: n, u: i ? i.u : "개", c: i ? i.c : "채소", price: priceOf(n), old: n };
+    V.sub = "item"; V.sug = null;
+  }
+  else if (a === "itemcancel") { V.itemForm = null; V.sug = null; }
+  else if (a === "itemsave") {
+    const f = V.itemForm, name = (f.n || "").trim();
+    if (!name) return toast("재료 이름을 적어 주세요");
+    S.prices[name] = Number(f.price) || 0;
+    if (f.old && f.old !== name) { delete S.prices[f.old]; S.items = S.items.filter((i) => i.n !== f.old); }
+    const at = S.items.filter((i) => i.n === name)[0];
+    if (at) { at.u = f.u; at.c = f.c; } else S.items.push({ n: name, u: f.u, c: f.c });
+    V.itemForm = null; V.sug = null; save(); toast(name + " 저장했어요");
+  }
   else if (a === "gobk") { V.screen = "menu"; V.sub = "data"; }
   else if (a === "expfile") {
     const ok = download("저녁식탁-백업-" + today() + ".json", exportText());
@@ -815,10 +1044,21 @@ document.addEventListener("change", (e) => {
 });
 
 document.getElementById("back").addEventListener("click", () => {
-  if (history.state && history.state.r) history.back();
-  else { V.screen = "home"; V.form = null; render(); }
+  if (V.form || V.itemForm || V.picker) { V.form = null; V.itemForm = null; V.picker = null; }
+  else { V.screen = "home"; V.sub = "list"; }
+  render();
 });
+/* 한 화면 넘게 내려갔을 때만 위로가기 버튼을 띄운다 */
+window.addEventListener("scroll", function () {
+  const b = document.getElementById("totop");
+  if (b) b.classList.toggle("on", window.scrollY > 400);
+}, { passive: true });
+document.getElementById("totop").addEventListener("click", function () {
+  window.scrollTo({ top: 0, behavior: "smooth" });
+});
+
 render();
+pushGuard();
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 
 /* ══ 드래그 앤 드롭 — 요일 메뉴 교환 (재생목록 스타일) ══ */
@@ -831,24 +1071,10 @@ var dragSrc = null, dragSrcDay = null, dragClone = null, dropTarget = null, isDr
 window.addEventListener("blur", function () { cleanupDrag(); });
 document.addEventListener("visibilitychange", function () { if (document.hidden) cleanupDrag(); });
 
-/* 요일을 교환하면 "된장국 3일차"가 1일차보다 앞에 오는 일이 생긴다.
-   앞에서부터 같은 국이 이어지는 만큼 다시 번호를 매긴다. */
-function resyncSoupAges() {
-  if (!S.plan) return;
-  let prevId = null, age = 0;
-  DAYS.forEach((d) => {
-    const p = S.plan[d];
-    if (!p || !p.soup) { prevId = null; age = 0; return; }
-    if (p.soup.id === prevId) age += 1; else { prevId = p.soup.id; age = 1; }
-    p.soup.age = age;
-  });
-}
-
 function swapDays(a, b) {
   const old = JSON.parse(JSON.stringify(S.plan));
   S.plan[a] = old[b];
   S.plan[b] = old[a];
-  resyncSoupAges();
   save();
   V.open = null;
   render();
