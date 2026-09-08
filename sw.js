@@ -1,4 +1,4 @@
-const V = "dinner-v3-6";
+const V = "dinner-v4-0";
 const FILES = ["./", "index.html", "styles.css", "data.js", "app.js",
   "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png"];
 

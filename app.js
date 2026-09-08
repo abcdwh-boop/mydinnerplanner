@@ -10,7 +10,7 @@ const CATS = Object.keys(SHELF);
 const FRESH = {
   v: 2, weekStart: null, plan: null, fridge: [], checked: {}, extra: [],
   trash: [], loved: [], excluded: [], custom: [], edits: {}, prices: {},
-  items: [], lastBackup: null, archive: [], settings: { sideDay: "수", outDay: "금", people: 3 },
+  plans: {}, items: [], lastBackup: null, archive: [], settings: { sideDay: "수", outDay: "금", people: 3 },
 };
 
 let S = loadState();
@@ -32,6 +32,10 @@ function loadState() {
       .forEach((k) => { if (!Array.isArray(s[k])) s[k] = []; });
     ["checked", "edits", "prices"].forEach((k) => { if (!s[k] || typeof s[k] !== "object") s[k] = {}; });
     if (!Array.isArray(s.items)) s.items = [];
+    if (!s.plans || typeof s.plans !== "object") s.plans = {};
+    // 예전에는 식단을 하나만 들고 있었다. 그 하나를 해당 주 칸으로 옮긴다.
+    if (s.plan && s.weekStart && !s.plans[s.weekStart]) s.plans[s.weekStart] = s.plan;
+    if (!s.checked || Array.isArray(s.checked)) s.checked = {};
     return s;
   } catch (e) { return base; }
 }
@@ -53,11 +57,22 @@ function defaultWeek() {
   const cur = mondayOf(new Date());
   return todayIdx() >= 4 ? addDays(cur, 7) : cur;
 }
-/* 지금 화면이 다루는 주. 식단이 있으면 그 주, 없으면 기본값. */
+/* 식단은 주마다 따로 보관한다. 다음 주를 미리 짜도 이번 주가 남는다. */
+const thisWeek = () => mondayOf(new Date());
+const planOf = (ws) => (S.plans && S.plans[ws]) || null;
+/* 지금 [식단] 화면이 보고 있는 주 */
 function targetWeek() {
   if (V.week) return V.week;
-  if (S.plan && S.weekStart) return S.weekStart;
+  if (planOf(thisWeek())) return thisWeek();   // 이번 주 것이 있으면 그것부터
   return defaultWeek();
+}
+const curPlan = () => planOf(targetWeek());
+/* 장보기·수정은 지금 보고 있는 주를 대상으로 한다 */
+function setPlan(ws, plan) { S.plans[ws] = plan; save(); }
+function checkedOf(ws) { if (!S.checked[ws]) S.checked[ws] = {}; return S.checked[ws]; }
+/* 오래된 주는 정리한다 (지난 메뉴 기록은 따로 남는다) */
+function prunePlans() {
+  Object.keys(S.plans).forEach((ws) => { if (gap(ws, today()) > 28) delete S.plans[ws]; });
 }
 function weekLabel(ws) {
   const d = gap(mondayOf(new Date()), ws) / 7;
@@ -65,13 +80,7 @@ function weekLabel(ws) {
     : d > 0 ? d + "주 뒤" : -d + "주 전";
 }
 /* 오늘이 그 주의 몇 번째 날인지. 벗어나 있으면 -1. */
-function planDayIdx() {
-  if (!S.plan || !S.weekStart) return -1;
-  const n = gap(S.weekStart, today());
-  return (n >= 0 && n <= 6) ? n : -1;
-}
-/* 그 주가 완전히 지나갔는지 (마지막 날이 어제 이전) */
-function weekEnded() { return S.plan && S.weekStart && gap(S.weekStart, today()) > 6; }
+function planDayIdx() { return todayIdx(); }
 
 function weekBar() {
   const ws = targetWeek();
@@ -164,8 +173,8 @@ function ratingOf(id) {
 
 /* ── 주간 식단 생성 ── */
 function generate() {
-  archiveCurrent();
   const wk = targetWeek();
+  archiveWeek(wk);              // 그 주에 이미 있던 식단만 기록으로 넘긴다
   const { sideDay, outDay } = S.settings;
   const expiring = S.fridge.filter((f) => leftOf(f) <= 2).map((f) => f.n);
   const recent = new Set(S.archive.slice(-2).flatMap((w) => DAYS.map((d) => w.days[d]).filter(Boolean)
@@ -229,30 +238,32 @@ function generate() {
     plan[d] = { type: "집밥", soup: soupOf[d] || null, main: main ? main.id : null, side: side ? side.id : null };
   });
 
-  S.weekStart = wk; S.plan = plan; S.checked = {}; V.week = null;
+  S.plans[wk] = plan; S.weekStart = wk; S.plan = null;
+  S.checked[wk] = {}; V.week = wk; prunePlans();
   save(); V.screen = "week"; V.open = null; render();
   toast("이번 주 식탁이 정해졌어요");
 }
 
-function archiveCurrent() {
-  if (!S.plan || !S.weekStart) return;
-  if (S.archive.some((w) => w.weekStart === S.weekStart)) return;
+function archiveWeek(ws) {
+  const plan = planOf(ws); if (!plan) return;
+  if (S.archive.some((w) => w.weekStart === ws)) return;
   const days = {};
-  DAYS.forEach((d) => { const p = S.plan[d]; days[d] = p ? Object.assign({}, p, { rating: 0 }) : null; });
-  S.archive.unshift({ weekStart: S.weekStart, days: days, cost: weekCost() });
+  DAYS.forEach((d) => { const p = plan[d]; days[d] = p ? Object.assign({}, p, { rating: 0 }) : null; });
+  S.archive.unshift({ weekStart: ws, days: days, cost: weekCost(ws) });
   S.archive = S.archive.slice(0, 30);
 }
 
 /* ── 장보기 ── */
-function shoppingList() {
+function shoppingList(ws) {
   const acc = {};
   const soupIds = [];
-  if (S.plan) DAYS.forEach((d) => {
-    const p = S.plan[d];
+  const plan = planOf(ws || targetWeek());
+  if (plan) DAYS.forEach((d) => {
+    const p = plan[d];
     if (p && p.soup && soupIds.indexOf(p.soup.id) === -1) soupIds.push(p.soup.id);
   });
-  if (S.plan) DAYS.forEach((d) => {
-    const p = S.plan[d]; if (!p) return;
+  if (plan) DAYS.forEach((d) => {
+    const p = plan[d]; if (!p) return;
     // 국은 아래에서 따로 한 번씩만 더한다
     [p.main, p.side].filter(Boolean).forEach((id) => {
       const r = getR(id); if (!r.ing) return;
@@ -281,15 +292,16 @@ function shoppingList() {
     return i;
   });
 }
-function weekCost() { return shoppingList().filter((i) => !i.have).reduce((a, i) => a + i.won, 0); }
-function dayCost(d) {
-  const p = S.plan && S.plan[d]; if (!p) return 0;
+function weekCost(ws) { return shoppingList(ws).filter((i) => !i.have).reduce((a, i) => a + i.won, 0); }
+function dayCost(d, ws) {
+  const plan = planOf(ws || targetWeek());
+  const p = plan && plan[d]; if (!p) return 0;
   let c = 0;
   if (p.main) c += costOf(getR(p.main));
   if (p.side) c += costOf(getR(p.side));
   if (p.soup) {
     let uses = 0;
-    DAYS.forEach((x) => { const q = S.plan[x]; if (q && q.soup && q.soup.id === p.soup.id) uses++; });
+    DAYS.forEach((x) => { const q = plan[x]; if (q && q.soup && q.soup.id === p.soup.id) uses++; });
     c += costOf(getR(p.soup.id)) / Math.max(uses, 1);
   }
   return c;
@@ -307,24 +319,20 @@ const stars = (n, act) => [1, 2, 3, 4, 5].map((k) =>
 
 /* ══ 화면 ══ */
 function homeView() {
-  const p = S.plan && S.plan[DAYS[planDayIdx()]];
-  const ended = weekEnded();
-  const di = planDayIdx();
+  // 오늘 탭은 [식단] 화면에서 어느 주를 보고 있든 상관없이 이번 주만 본다
+  const tw = thisWeek();
+  const plan = planOf(tw);
+  const di = todayIdx();
+  const p = plan && plan[DAYS[di]];
   let h = "";
 
-  if (!S.plan || ended) {
+  if (!plan) {
+    const nx = planOf(addDays(tw, 7));
     h += `<div class="hero">
-      <p>${ended ? "지난 식탁의 기간이 끝났어요.<br>새로 짜면 지난 식단은 기록에 저장됩니다."
-                 : "저녁 일곱 끼를 한 번에 정해 드릴게요.<br>평일 메뉴는 30분을 넘기지 않습니다."}</p>
-      <button class="btn" data-a="go:week">${weekLabel(targetWeek())} 식탁 짜러 가기</button></div>`;
-  } else if (di < 0) {
-    // 다음 주 식단을 미리 짜 둔 경우
-    h += `<div class="hero left">
-      <div class="k">${weekLabel(S.weekStart)} 식단</div>
-      <h2>${lab(S.weekStart)} ~ ${lab(addDays(S.weekStart, 6))}</h2>
-      <div class="sub">오늘은 이 식단에 들어 있지 않아요. 월요일부터 시작합니다.</div>
-      <div class="acts"><button class="mini" data-a="go:week">식단 보기</button>
-        <button class="mini" data-a="go:shop">장보기 목록</button></div></div>`;
+      <p>이번 주 식단이 아직 없어요.${nx ? "<br>다음 주 식단은 준비돼 있습니다." : ""}</p>
+      <button class="btn" data-a="goweek:${tw}">이번 주 식탁 짜러 가기</button>
+      ${nx ? `<div class="acts"><button class="mini" data-a="goweek:${addDays(tw, 7)}">다음 주 식단 보기</button></div>` : ""}
+    </div>`;
   } else {
     const soup = p && p.soup ? getR(p.soup.id) : null;
     const main = p && p.main ? getR(p.main) : null;
@@ -332,12 +340,13 @@ function homeView() {
     const mins = (main ? main.min : 0) + (side ? side.min : 0);
     h += `<div class="hero left">
       <div class="k">오늘 · ${DAYS[di]}요일</div>
-      ${p.type === "외식" ? "<h2>바깥에서 먹는 날</h2>"
+      ${!p ? "<h2>메뉴 없음</h2>"
+        : p.type === "외식" ? "<h2>바깥에서 먹는 날</h2>"
         : p.type === "반찬" ? "<h2>반찬 사 오는 날</h2>"
         : `<h2>${esc(main ? main.name : "메뉴 없음")}</h2>`}
       <div class="sub">${soup ? esc(soup.name) : ""}${soup && side ? " · " : ""}${side ? esc(side.name) : ""}</div>
-      ${mins ? `<div class="sub mt">조리 ${mins}분 · 재료값 ${won(dayCost(DAYS[di]))}</div>` : ""}
-      <div class="acts"><button class="mini" data-a="go:week">이번 주 전체 보기</button></div>
+      ${mins ? `<div class="sub mt">조리 ${mins}분 · 재료값 ${won(dayCost(DAYS[di], tw))}</div>` : ""}
+      <div class="acts"><button class="mini" data-a="goweek:${tw}">이번 주 전체 보기</button></div>
     </div>`;
   }
 
@@ -348,24 +357,25 @@ function homeView() {
       ${over.length ? `기한이 지난 재료 ${over.length}가지를 정리해 주세요`
                     : `<b>${soon.slice(0, 3).map((f) => esc(f.n)).join(", ")}</b>, 이틀 안에 쓰는 게 좋아요`}</button>`;
   }
-  if (S.plan) {
-    const buy = shoppingList().filter((i) => !i.have && !S.checked[i.n]).length;
-    if (buy) h += `<button class="notice" data-a="go:shop">아직 못 산 재료가 ${buy}가지 있어요 · ${won(weekCost())}</button>`;
+  if (plan) {
+    const ck = checkedOf(tw);
+    const buy = shoppingList(tw).filter((i) => !i.have && !ck[i.n]).length;
+    if (buy) h += `<button class="notice" data-a="goshop:${tw}">아직 못 산 재료가 ${buy}가지 있어요 · ${won(weekCost(tw))}</button>`;
   }
   if (S.archive.length >= 3 && (!S.lastBackup || gap(S.lastBackup, today()) > 30)) {
     h += `<button class="notice quiet" data-a="gobk">기록이 ${S.archive.length}주 쌓였어요. 백업해 두시겠어요?</button>`;
   }
-  if (S.archive.length) {
-    h += `<div class="acts"><button class="mini" data-a="go:past">지난 메뉴와 별점 보기</button></div>`;
-  }
+  if (S.archive.length) h += `<div class="acts"><button class="mini" data-a="go:past">지난 메뉴와 별점 보기</button></div>`;
   return h;
 }
 
 function weekView() {
-  if (!S.plan) return weekBar() +
-    `<div class="hero"><p>위에서 주를 고르고 아래 버튼을 누르면 7일치가 정해집니다.</p>
+  const plan = curPlan();
+  if (!plan) return weekBar() +
+    `<div class="hero"><p><b>${weekLabel(targetWeek())}</b> 식단은 아직 없어요.<br>
+      버튼을 누르면 이 주 7일치가 정해집니다. 다른 주 식단은 그대로 남습니다.</p>
      <button class="btn" data-a="gen">${weekLabel(targetWeek())} 식탁 짜기</button></div>`;
-  const ti = planDayIdx(), fresh = ti >= 0;
+  const ti = todayIdx(), fresh = targetWeek() === thisWeek();
   const cs = S.settings;
   let h = weekBar() + `<button class="cond${V.cond ? " open" : ""}" data-a="cond">
       <span>반찬 <b>${cs.sideDay}</b> · 외식 <b>${cs.outDay}</b> · <b>${cs.people}명</b></span>
@@ -384,7 +394,7 @@ function weekView() {
     <span class="tot">${won(DAYS.reduce((a, d) => a + dayCost(d), 0))}</span></div>`;
   h += `<div class="week-list">`;
   h += DAYS.map((d, i) => {
-    const p = S.plan[d]; if (!p) return "";
+    const p = plan[d]; if (!p) return "";
     const soup = p.soup ? getR(p.soup.id) : null, main = p.main ? getR(p.main) : null, side = p.side ? getR(p.side) : null;
     const mins = (main ? main.min : 0) + (side ? side.min : 0);
     const open = V.open === d;
@@ -408,8 +418,9 @@ function weekView() {
     </div>`;
   }).join("");
   h += `</div>`;
-  h += `<div class="acts"><button class="btn ghost" data-a="gen">전체 다시 짜기</button>
-        <button class="btn ghost" data-a="finish">이번 주 기록에 저장</button></div>`;
+  h += `<div class="acts"><button class="btn ghost" data-a="gen">${weekLabel(targetWeek())} 다시 짜기</button>
+        <button class="btn ghost" data-a="finish">기록에 저장</button>
+        <button class="btn ghost" data-a="delweek">이 주 식단 지우기</button></div>`;
   return h;
 }
 
@@ -439,12 +450,16 @@ function dayDetail(d, p) {
 }
 
 function shopView() {
-  if (!S.plan) return `<div class="hero"><p>식단을 먼저 짜면 살 것이 자동으로 정리됩니다.</p><button class="btn" data-a="go:week">이번 주 식단으로</button></div>`;
-  const list = shoppingList();
+  const ws = targetWeek();
+  if (!planOf(ws)) return weekBar() +
+    `<div class="hero"><p><b>${weekLabel(ws)}</b> 식단이 없어서 살 것도 없어요.</p>
+     <button class="btn" data-a="go:week">식단 짜러 가기</button></div>`;
+  const list = shoppingList(ws);
+  const ck = checkedOf(ws);
   const buy = list.filter((i) => !i.have);
-  let h = `<p class="lead">이번 주 메뉴에서 자동으로 뽑은 목록입니다. 메뉴를 바꾸면 여기도 바뀝니다.
+  let h = weekBar() + `<p class="lead"><b>${weekLabel(ws)}</b> 메뉴에서 자동으로 뽑은 목록입니다. 메뉴를 바꾸면 여기도 바뀝니다.
     냉장고에 있는 건 회색으로 빠져 있어요.</p>
-    <div class="bar"><span>살 것 ${buy.length}가지</span><span class="tot">${won(weekCost())}</span></div>`;
+    <div class="bar"><span>살 것 ${buy.length}가지</span><span class="tot">${won(weekCost(ws))}</span></div>`;
   GROUP_ORDER.forEach((g) => {
     const items = list.filter((i) => GROUP[i.c] === g);
     if (!items.length) return;
@@ -452,7 +467,7 @@ function shopView() {
     items.forEach((i) => {
       const tc = S.trash.filter((t) => t.n === i.n && gap(t.d, today()) < 35).length;
       h += `<div class="li${i.have ? " have" : ""}" ${i.have ? "" : `data-a="chk:${esc(i.n)}"`}>
-        <span class="cb${S.checked[i.n] || i.have ? " on" : ""}"></span>
+        <span class="cb${ck[i.n] || i.have ? " on" : ""}"></span>
         <span class="ln">${esc(i.n)}${tc >= 2 ? `<i class="warn">최근 ${tc}번 버림 · 적게</i>` : ""}
           <i class="dim">${esc(i.from.slice(0, 2).join(", "))}</i></span>
         <span class="lq">${i.have ? "집에 있음" : i.q + i.u + (i.won ? "<br><i class='dim'>" + won(i.won) + "</i>" : "")}</span>
@@ -917,6 +932,7 @@ document.addEventListener("click", (e) => {
   const b = e.target.closest("[data-a]"); if (!b) return;
   clearTimeout(renderTimer);          // 대기 중이던 그리기는 버린다
   composing = false;
+  if (b.dataset.a !== "delweek") V.delw = false;
   const [a, x, y, z] = b.dataset.a.split(":");
 
   if (a === "go") { V.screen = x; V.open = null; V.form = null; }
@@ -927,17 +943,20 @@ document.addEventListener("click", (e) => {
   else if (a === "closepick") V.picker = null;
   else if (a === "putslot") {
     V.picker = null;
-    if (S.plan && S.plan[x]) {
-      const p = Object.assign({}, S.plan[x]);
-      if (y === "soup") p.soup = { id: z, age: 1 }; else p[y] = z;
+    const pl = curPlan();
+    if (pl && pl[x]) {
+      const p = Object.assign({}, pl[x]);
+      if (y === "soup") p.soup = { id: z }; else p[y] = z;
       if (y === "main" && p.type !== "집밥") p.type = "집밥";
-      S.plan[x] = p; save();
-    } else toast("먼저 이번 주 식단을 짜 주세요");
+      pl[x] = p; save();
+    } else toast("먼저 이 주 식단을 짜 주세요");
   }
   else if (a === "cfg") { S.settings[x] = x === "people" ? Number(y) : y; save(); }
-  else if (a === "clear") { const p = Object.assign({}, S.plan[x]); if (y === "soup") p.soup = null; else p[y] = null; S.plan[x] = p; save(); }
-  else if (a === "type") { S.plan[x] = Object.assign({}, S.plan[x], { type: y }); save(); }
-  else if (a === "chk") { S.checked[x] = !S.checked[x]; save(); }
+  else if (a === "clear") { const pl = curPlan(); if (!pl) return;
+    const p = Object.assign({}, pl[x]); if (y === "soup") p.soup = null; else p[y] = null; pl[x] = p; save(); }
+  else if (a === "type") { const pl = curPlan(); if (!pl) return;
+    pl[x] = Object.assign({}, pl[x], { type: y }); save(); }
+  else if (a === "chk") { const ck = checkedOf(targetWeek()); ck[x] = !ck[x]; save(); }
   else if (a === "addextra") {
     if (!TMP.ex.n.trim()) return toast("재료 이름을 적어 주세요");
     S.extra.push({ n: TMP.ex.n.trim(), q: Number(TMP.ex.q) || 1, u: TMP.ex.u, c: TMP.ex.c });
@@ -945,11 +964,12 @@ document.addEventListener("click", (e) => {
   }
   else if (a === "delextra") { S.extra = S.extra.filter((i) => i.n !== x); save(); }
   else if (a === "buy") {
-    const list = shoppingList().filter((i) => S.checked[i.n] && !i.have);
+    const ws = targetWeek(), ck = checkedOf(ws);
+    const list = shoppingList(ws).filter((i) => ck[i.n] && !i.have);
     if (!list.length) return toast("체크한 것이 없어요");
     S.fridge = S.fridge.filter((f) => !list.some((i) => i.n === f.n))
       .concat(list.map((i) => ({ id: Math.random().toString(36).slice(2), n: i.n, c: i.c, q: i.q + i.u, bought: today() })));
-    S.checked = {}; save(); V.screen = "fridge"; toast(list.length + "가지를 냉장고에 넣었어요");
+    S.checked[ws] = {}; save(); V.screen = "fridge"; toast(list.length + "가지를 냉장고에 넣었어요");
   }
   else if (a === "used") { S.fridge = S.fridge.filter((f) => f.id !== x); save(); }
   else if (a === "trash") {
@@ -964,12 +984,13 @@ document.addEventListener("click", (e) => {
   }
   else if (a === "sub") { V.sub = x; V.openRec = null; V.wipe = false; V.sug = null; V.focus = null; }
   else if (a === "cond") V.cond = !V.cond;
-  else if (a === "wshift") {
-    const ws = addDays(targetWeek(), Number(x));
-    if (S.plan) {                       // 이미 짠 식단이면 그 식단의 기간을 옮긴다
-      if (S.archive.some((w) => w.weekStart === ws)) return toast("그 주는 이미 기록에 있어요");
-      S.weekStart = ws; V.week = null; save();
-    } else V.week = ws;
+  else if (a === "wshift") { V.week = addDays(targetWeek(), Number(x)); V.open = null; }
+  else if (a === "goweek") { V.week = x; V.screen = "week"; V.open = null; }
+  else if (a === "goshop") { V.week = x; V.screen = "shop"; }
+  else if (a === "delweek") {
+    const ws = targetWeek();
+    if (!V.delw) { V.delw = true; toast("한 번 더 누르면 이 주 식단이 지워집니다"); }
+    else { delete S.plans[ws]; delete S.checked[ws]; V.delw = false; save(); toast(weekLabel(ws) + " 식단을 지웠어요"); }
   }
   else if (a === "filter") { V.filter = decodeURIComponent(x); V.openRec = null; }
   else if (a === "sort") V.sort = x;
@@ -1074,19 +1095,20 @@ document.addEventListener("click", (e) => {
   else if (a === "reset") { delete S.edits[x]; save(); toast("원래대로 되돌렸어요"); }
   else if (a === "delrec") {
     S.custom = S.custom.filter((c) => c.id !== x);
-    if (S.plan) DAYS.forEach((d) => { const p = S.plan[d]; if (!p) return;
-      if (p.soup && p.soup.id === x) p.soup = null; if (p.main === x) p.main = null; if (p.side === x) p.side = null; });
+    Object.keys(S.plans).forEach((ws) => DAYS.forEach((d) => { const p = S.plans[ws][d]; if (!p) return;
+      if (p.soup && p.soup.id === x) p.soup = null; if (p.main === x) p.main = null; if (p.side === x) p.side = null; }));
     save(); toast("메뉴를 지웠어요");
   }
-  else if (a === "finish") { archiveCurrent(); save(); V.screen = "past"; V.openWeek = 0; toast("기록에 저장했어요"); }
+  else if (a === "finish") { archiveWeek(targetWeek()); save(); V.screen = "past"; V.openWeek = 0; toast("기록에 저장했어요"); }
   else if (a === "wk") V.openWeek = V.openWeek === +x ? null : +x;
   else if (a === "rate") { S.archive[+x].days[y].rating = +z; save(); }
   else if (a === "delwk") { S.archive.splice(+x, 1); V.openWeek = null; save(); }
   else if (a === "reuse") {
     const w = S.archive[+x]; const plan = {};
     DAYS.forEach((d) => { const p = w.days[d]; plan[d] = p ? { type: p.type, soup: p.soup, main: p.main, side: p.side } : null; });
-    archiveCurrent(); S.weekStart = mondayOf(new Date()); S.plan = plan; S.checked = {};
-    save(); V.screen = "week"; toast("이 주 식단을 가져왔어요");
+    const ws = targetWeek();
+    archiveWeek(ws); S.plans[ws] = plan; S.checked[ws] = {};
+    save(); V.screen = "week"; toast(weekLabel(ws) + " 식단으로 가져왔어요");
   }
   render();
 });
@@ -1128,9 +1150,10 @@ window.addEventListener("blur", function () { cleanupDrag(); });
 document.addEventListener("visibilitychange", function () { if (document.hidden) cleanupDrag(); });
 
 function swapDays(a, b) {
-  const old = JSON.parse(JSON.stringify(S.plan));
-  S.plan[a] = old[b];
-  S.plan[b] = old[a];
+  const plan = curPlan(); if (!plan) return;
+  const old = JSON.parse(JSON.stringify(plan));
+  plan[a] = old[b];
+  plan[b] = old[a];
   save();
   V.open = null;
   render();
