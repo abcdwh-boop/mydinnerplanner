@@ -400,9 +400,10 @@ function weekView() {
     const open = V.open === d;
     let body;
     if (p.type === "외식") body = `<div class="mn dim">바깥에서 먹는 날</div>`;
-    else if (p.type === "반찬") body = `<div class="mn">반찬 사 오는 날</div><div class="sb">${soup ? esc(soup.name) + " · " : ""}밥과 국만</div>`;
-    else body = `<div class="mn">${esc(main ? main.name : "메뉴를 골라 주세요")}</div>
-      <div class="sb">${soup ? esc(soup.name) : ""}${soup && side ? " · " : ""}${side ? esc(side.name) : ""}</div>`;
+    else if (p.type === "반찬") body = `<div class="mn">${soup ? esc(soup.name) + " · " : ""}반찬 사 오는 날</div>
+      <div class="sb">밥과 국만 준비</div>`;
+    else body = `<div class="mn">${soup ? esc(soup.name) : ""}${soup && main ? " · " : ""}${esc(main ? main.name : (soup ? "" : "메뉴를 골라 주세요"))}</div>
+      <div class="sb">${side ? esc(side.name) : ""}</div>`;
     return `<div class="day-row" data-day="${d}">
       <div class="day-label${i === ti && fresh ? ' today' : ''}">
         <b>${d}</b><i>${lab(addDays(S.weekStart, i))}</i>
@@ -637,9 +638,10 @@ function itemView() {
 
 function menuView() {
   if (V.form) return formView();
-  const tabs = [["list", "메뉴"], ["item", "재료"], ["data", "백업"]];
-  let h = `<div class="tabs">${tabs.map(([k, l]) =>
-    `<button class="tb${V.sub === k ? " on" : ""}" data-a="sub:${k}">${l}</button>`).join("")}</div>`;
+  // 백업은 식단과 무관한 관리 기능이라 따로 떨어뜨리고 색도 다르게 준다
+  const tabs = [["list", "메뉴", ""], ["item", "재료", ""], ["data", "백업", " alt"]];
+  let h = `<div class="tabs">${tabs.map(([k, l, cls]) =>
+    `<button class="tb${cls}${V.sub === k ? " on" : ""}" data-a="sub:${k}">${l}</button>`).join("")}</div>`;
   if (V.sub === "data") return h + dataView();
   if (V.sub === "item") return h + itemView();
   return h + menuListView();
@@ -1146,6 +1148,7 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catc
 // var로 선언한다. 이 블록은 파일 아래쪽에 있는데 render()는 그보다 먼저 도는데,
 // let이면 초기화 전 접근으로 첫 로딩에서 바로 죽는다.
 var dragSrc = null, dragSrcDay = null, dragClone = null, dropTarget = null, isDragging = false;
+var holdTimer = null, holdReady = false;
 window.addEventListener("blur", function () { cleanupDrag(); });
 document.addEventListener("visibilitychange", function () { if (document.hidden) cleanupDrag(); });
 
@@ -1161,6 +1164,9 @@ function swapDays(a, b) {
 }
 
 function cleanupDrag() {
+  clearTimeout(holdTimer);
+  holdReady = false;
+  document.querySelectorAll(".holding").forEach((el) => el.classList.remove("holding"));
   if (dragClone) { dragClone.remove(); dragClone = null; }
   // 렌더로 사라진 노드까지 훑어 남은 흔적을 지운다
   document.querySelectorAll(".dragging").forEach((el) => el.remove());
@@ -1280,25 +1286,47 @@ function initDrag() {
     dragSrcDay = card.dataset.day;
     startY = getY(e);
     isDragging = false;
+    holdReady = false;
     const rect = card.getBoundingClientRect();
     offsetY = getY(e) - rect.top;
+
+    // 0.7초를 누르고 있어야 집어 올려진다. 스치듯 눌렀을 때 옮겨지는 걸 막는다.
+    card.classList.add('holding');
+    clearTimeout(holdTimer);
+    holdTimer = setTimeout(function () {
+      if (!dragSrc) return;
+      holdReady = true;
+      dragSrc.classList.remove('holding');
+      liftClone();
+      if (navigator.vibrate) navigator.vibrate(18);   // 집혔다는 신호
+    }, 700);
+  }
+
+  /* 카드를 들어 올린 복제본을 만든다 */
+  function liftClone() {
+    if (dragClone || !dragSrc) return;
+    isDragging = true;
+    dragClone = dragSrc.cloneNode(true);
+    dragClone.classList.add('dragging');
+    dragClone.classList.remove('holding');
+    dragClone.removeAttribute('data-day');
+    dragClone.style.width = dragSrc.offsetWidth + 'px';
+    const r = dragSrc.getBoundingClientRect();
+    dragClone.style.top = r.top + 'px';
+    dragClone.style.left = r.left + 'px';
+    document.body.appendChild(dragClone);
+    dragSrc.classList.add('drag-origin');
   }
 
   function onTouchMove(e) {
     if (!dragSrc) return;
     const dy = Math.abs(getY(e) - startY);
-    if (!isDragging && dy < DRAG_THRESHOLD) return;
 
-    if (!isDragging) {
-      isDragging = true;
-      dragClone = dragSrc.cloneNode(true);
-      dragClone.classList.add('dragging');
-      dragClone.removeAttribute('data-day');
-      dragClone.style.width = dragSrc.offsetWidth + 'px';
-      document.body.appendChild(dragClone);
-      dragSrc.classList.add('drag-origin');
+    // 아직 충분히 누르지 않았는데 움직이면, 집을 뜻이 없는 것으로 보고 취소한다
+    if (!holdReady) {
+      if (dy > DRAG_THRESHOLD) { clearTimeout(holdTimer); dragSrc.classList.remove('holding'); cleanupDrag(); }
+      return;
     }
-
     e.preventDefault();
     dragClone.style.top = (getY(e) - offsetY) + 'px';
     dragClone.style.left = dragSrc.getBoundingClientRect().left + 'px';

@@ -384,15 +384,26 @@ h3.gh{
    메뉴 관리
    ══════════════════════════════════ */
 .tabs{
-  display:flex; gap:6px; border-bottom:2px solid var(--line); margin-bottom:8px;
+  display:flex; gap:6px; margin-bottom:14px; align-items:center;
 }
 .tb{
-  background:none; border:none; padding:10px 14px; font-size:15px;
-  color:var(--soft); cursor:pointer; font-family:inherit; font-weight:300;
-  border-bottom:3px solid transparent; margin-bottom:-2px;
-  transition:all .2s ease;
+  background:var(--ceramic); border:1px solid var(--line); border-radius:var(--pill);
+  padding:9px 18px; font-size:14px; font-weight:600;
+  color:var(--soft); cursor:pointer; font-family:inherit;
+  transition:background .15s ease, color .15s ease;
 }
-.tb.on{color:var(--starbucks); font-weight:700; border-bottom-color:var(--accent)}
+.tb.on{
+  background:var(--starbucks); border-color:var(--starbucks);
+  color:#fff; font-weight:700;
+}
+/* 백업 — 식단과 무관한 관리 기능. 오른쪽 끝에 회색으로 떨어뜨린다 */
+.tb.alt{
+  margin-left:auto; background:transparent;
+  border:1px dashed var(--line); color:var(--soft); font-weight:500;
+}
+.tb.alt.on{
+  background:#5f5f59; border:1px solid #5f5f59; color:#fff; font-weight:700;
+}
 
 .mi{border-bottom:1px solid var(--canvas)}
 .mi:last-child{border-bottom:none}
@@ -694,3 +705,10 @@ h3.gh.sticky{
 .weekbar .wlab{flex:1; text-align:center; line-height:1.35; min-width:0}
 .weekbar .wlab b{display:block; font-size:14.5px; font-weight:700; color:var(--ink)}
 .weekbar .wlab i{display:block; font-size:11.5px; font-style:normal; color:var(--gold); font-weight:700}
+
+/* 길게 누르는 동안 집히는 중이라는 신호 */
+.day-content.holding{
+  transform:scale(.985);
+  transition:transform .55s ease-out;
+}
+.day-content.holding .drag-handle{color:var(--gold)}
